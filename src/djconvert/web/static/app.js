@@ -19,8 +19,8 @@ const NEXT_STEPS = {
     <li>It appears under <b>rekordbox xml</b> in the tree (enable it under Preferences › View › Layout if not).</li>
     <li>Right-click playlists there › <i>Import Playlist</i>.</li></ol>`,
   rekordbox_usb: `<h3>Using the stick</h3><ol>
-    <li>Eject it safely and plug it into the player. Pre-NXS2 players only play MP3 reliably.</li>
-    <li>Don't open it in Rekordbox: Rekordbox rewrites sticks it mounts.</li>
+    <li>Eject it safely, then plug it into the laptop (Rekordbox shows it under Devices; Mixxx lists it under Rekordbox) or into a player. Pre-NXS2 players only play MP3 reliably.</li>
+    <li>If Rekordbox ever loses playlist entries on it (one report says Rekordbox 7 did this to another tool's stick), write it again: it's quick, and the old <code>export.pdb</code> is kept as a backup.</li>
     <li>If something looks wrong, the previous <code>export.pdb</code> is kept next to the new one with a <code>.djconvert-…</code> suffix.</li></ol>`,
   serato: `<h3>Using it in Serato</h3><ol>
     <li>Quit Serato. For a new library, copy the generated <code>database V2</code> and <code>Subcrates</code> into your <code>_Serato_</code> folder (back it up first).</li>

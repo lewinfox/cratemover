@@ -98,8 +98,8 @@
 
     <div data-show-dst="rekordbox_usb">
       <p class="hint">Choose the stick's mount point (or any folder). Tracks already on the stick are used where
-        they are; others are copied to <code>/Contents</code>. Don't plug the stick into Rekordbox afterwards: it
-        rewrites sticks it mounts.</p>
+        they are; others are copied to <code>/Contents</code>. Writing again is quick (audio and waveforms
+        already on the stick are reused), and the previous <code>export.pdb</code> is kept as a backup.</p>
       <label class="check"><input type="checkbox" id="dst-copy" checked> Copy tracks that aren't on the stick onto it</label>
       <label class="check"><input type="checkbox" id="dst-waveforms" checked> Draw waveforms from the audio (ffmpeg; otherwise reused or flat)</label>
       <div class="row">

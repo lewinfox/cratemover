@@ -95,8 +95,20 @@ waveforms) at the hashed paths players look for. It works in place on a mounted 
   This is experimental: nobody has published a hardware test of a third-party one. Otherwise a
   stale one is moved aside so it can't contradict the new `export.pdb`.
 
-**Never plug a stick into Rekordbox to check it**: Rekordbox rewrites sticks it mounts. Test on the
-player, or read it back with this tool or Mixxx (which can browse Rekordbox sticks).
+**Rekordbox and sticks written by other tools.** Using a stick in Rekordbox is what device
+libraries are for, but there is one worrying report about sticks Rekordbox didn't write itself.
+[rbsync](https://github.com/aquarazorda/rbsync) (a third-party stick writer) measured two things
+with Rekordbox 7.2.6 on macOS:
+
+- merely having a stick plugged in while Rekordbox runs changed one byte of its database header and
+  added write-ahead-log files and macOS sidecar files (harmless bookkeeping);
+- opening its self-written 5,825-entry stick in Rekordbox deleted 768 playlist entries across 30
+  playlists. All the tracks survived; the memberships didn't. The cause isn't known.
+
+That's a single report, about another tool's output, and not yet reproduced with this tool's sticks.
+Until it is, keep the source library (this tool never modifies the source when writing a stick), and
+if Rekordbox does damage a stick, write it again: that rebuilds `export.pdb` in seconds, reusing the
+audio and waveforms already there. The previous `export.pdb` is also kept as a backup.
 
 How it was checked: the reader agrees with an independent parser
 ([fragmede/rekordbox-pdb](https://github.com/fragmede/rekordbox-pdb), vendored in

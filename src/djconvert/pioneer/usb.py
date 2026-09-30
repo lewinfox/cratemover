@@ -11,8 +11,9 @@ Writing produces a fresh device library in place on a mounted stick:
   possible, otherwise measured with ffmpeg, otherwise flat placeholders.
 
 Stale files that would contradict the new database (``exportLibrary.db`` and
-``exportExt.pdb``) are moved aside. Never check a stick by plugging it into
-Rekordbox: it rewrites sticks it mounts.
+``exportExt.pdb``) are moved aside. One report (rbsync, Rekordbox 7.2.6) saw
+Rekordbox delete playlist entries from a third-party-written stick it opened;
+writing the stick again rebuilds export.pdb quickly if that happens.
 """
 
 from __future__ import annotations
