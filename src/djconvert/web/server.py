@@ -1,0 +1,414 @@
+"""FastAPI app: pick a source library, look at it, convert it, download the result.
+
+Environment:
+
+* ``EXPORT_DIR`` (default ``./export``): conversions are written under here.
+* ``BROWSE_ROOTS`` (default ``/sources:<EXPORT_DIR>:$HOME``): folders the file
+  picker may show, separated by ``:``.
+* ``UPLOAD_DIR`` (default a temp dir): where uploaded libraries are unpacked.
+"""
+
+from __future__ import annotations
+
+import io
+import os
+import tempfile
+import threading
+import traceback
+import uuid
+import zipfile
+from collections import Counter
+from dataclasses import asdict, dataclass, field
+from pathlib import Path
+from typing import Any
+
+from fastapi import FastAPI, HTTPException, UploadFile
+from fastapi.responses import FileResponse, Response
+from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
+
+from .. import __version__
+from ..convert import (
+    FORMATS,
+    ReadOptions,
+    WriteOptions,
+    make_resolver,
+    parse_rules,
+    read_library,
+    write_library,
+)
+from ..keys import KeyNotation, format_key
+from ..model import Library, Playlist, Track
+
+EXPORT_DIR = Path(os.environ.get("EXPORT_DIR", "export")).resolve()
+UPLOAD_DIR = Path(os.environ.get("UPLOAD_DIR") or tempfile.mkdtemp(prefix="djconvert-uploads-"))
+BROWSE_ROOTS = [
+    Path(p)
+    for p in os.environ.get("BROWSE_ROOTS", f"/sources:{EXPORT_DIR}:{Path.home()}").split(":")
+    if p
+]
+
+app = FastAPI(title="DJ Library Converter", version=__version__)
+
+
+# --- background jobs --------------------------------------------------------------------
+
+
+@dataclass
+class Job:
+    id: str
+    kind: str
+    status: str = "running"  # running | done | error
+    message: str = ""
+    result: dict[str, Any] | None = None
+    error: str | None = None
+    log: list[str] = field(default_factory=list)
+
+
+_jobs: dict[str, Job] = {}
+_libraries: dict[str, tuple[ReadOptions, Library]] = {}  # job id -> loaded library
+_lock = threading.Lock()
+
+
+def _start(kind: str, work: Any) -> Job:
+    job = Job(uuid.uuid4().hex[:12], kind)
+    with _lock:
+        _jobs[job.id] = job
+
+    def progress(message: str) -> None:
+        job.message = message
+        job.log.append(message)
+
+    def run() -> None:
+        try:
+            job.result = work(job, progress)
+            job.status = "done"
+        except Exception as exc:
+            job.status, job.error = "error", f"{type(exc).__name__}: {exc}"
+            job.log.append(traceback.format_exc())
+
+    threading.Thread(target=run, daemon=True).start()
+    return job
+
+
+@app.get("/api/jobs/{job_id}")
+def get_job(job_id: str) -> dict[str, Any]:
+    job = _jobs.get(job_id)
+    if job is None:
+        raise HTTPException(404, "no such job")
+    return asdict(job) | {"log": job.log[-20:]}
+
+
+# --- info and file browsing ----------------------------------------------------------------
+
+
+@app.get("/api/info")
+def info() -> dict[str, Any]:
+    return {
+        "version": __version__,
+        "formats": FORMATS,
+        "key_notations": [k.value for k in KeyNotation],
+        "export_dir": str(EXPORT_DIR),
+        "browse_roots": [str(p) for p in BROWSE_ROOTS if p.exists()],
+        "suggestions": _suggest_sources(),
+    }
+
+
+def _suggest_sources() -> list[dict[str, str]]:
+    """Libraries found in the usual mount points and home folder."""
+    found: list[dict[str, str]] = []
+    for root in BROWSE_ROOTS:
+        if not root.is_dir():
+            continue
+        for depth_glob, fmt in (
+            ("mixxxdb.sqlite", "mixxx"),
+            ("*/mixxxdb.sqlite", "mixxx"),
+            (".mixxx/mixxxdb.sqlite", "mixxx"),
+            ("_Serato_/database V2", "serato"),
+            ("*/_Serato_/database V2", "serato"),
+            ("database V2", "serato"),
+            ("*/database V2", "serato"),
+            ("*.xml", "rekordbox_xml"),
+            ("*/*.xml", "rekordbox_xml"),
+        ):
+            try:
+                for match in sorted(root.glob(depth_glob))[:10]:
+                    path = match.parent if fmt == "serato" else match
+                    if fmt == "rekordbox_xml" and not _is_rekordbox_xml(match):
+                        continue
+                    entry = {"format": fmt, "path": str(path)}
+                    if entry not in found:
+                        found.append(entry)
+            except OSError:
+                continue
+    return found
+
+
+def _is_rekordbox_xml(path: Path) -> bool:
+    try:
+        with open(path, "rb") as f:
+            return b"DJ_PLAYLISTS" in f.read(2048)
+    except OSError:
+        return False
+
+
+def _allowed(path: Path) -> bool:
+    resolved = path.resolve()
+    return any(
+        resolved == r.resolve() or r.resolve() in resolved.parents for r in BROWSE_ROOTS
+    ) or (UPLOAD_DIR.resolve() in resolved.parents)
+
+
+@app.get("/api/browse")
+def browse(path: str = "") -> dict[str, Any]:
+    if not path:
+        return {
+            "path": "",
+            "parent": None,
+            "entries": [
+                {"name": str(r), "path": str(r), "dir": True} for r in BROWSE_ROOTS if r.exists()
+            ],
+        }
+    target = Path(path)
+    if not _allowed(target) or not target.is_dir():
+        raise HTTPException(403, "folder not available")
+    entries = []
+    try:
+        for child in sorted(target.iterdir(), key=lambda p: (not p.is_dir(), p.name.lower())):
+            if child.name.startswith(".") and child.name not in (".mixxx",):
+                continue
+            entries.append({"name": child.name, "path": str(child), "dir": child.is_dir()})
+    except PermissionError as exc:
+        raise HTTPException(403, "permission denied") from exc
+    parent = (
+        str(target.parent)
+        if any(r.resolve() in target.resolve().parents for r in BROWSE_ROOTS)
+        else ""
+    )
+    return {"path": str(target), "parent": parent, "entries": entries[:2000]}
+
+
+@app.post("/api/upload")
+async def upload(file: UploadFile) -> dict[str, str]:
+    """Upload a rekordbox.xml, a mixxxdb.sqlite, or a zip of a _Serato_ folder."""
+    dest = UPLOAD_DIR / uuid.uuid4().hex[:12]
+    dest.mkdir(parents=True)
+    name = Path(file.filename or "upload").name
+    data = await file.read()
+    if name.lower().endswith(".zip"):
+        with zipfile.ZipFile(io.BytesIO(data)) as archive:
+            for member in archive.namelist():
+                target = (dest / member).resolve()
+                if dest.resolve() not in target.parents:
+                    raise HTTPException(400, "unsafe path in zip")
+            archive.extractall(dest)
+        serato = next(dest.rglob("database V2"), None)
+        return {"path": str(serato.parent if serato else dest)}
+    (dest / name).write_bytes(data)
+    return {"path": str(dest / name)}
+
+
+# --- inspect and convert ------------------------------------------------------------------
+
+
+class ReadRequest(BaseModel):
+    format: str
+    path: str
+    access_rules: str = ""
+    mp3_decoder: str = "MAD"
+    serato_root: str = "/"
+    read_file_tags: bool = True
+
+
+class WriteRequest(BaseModel):
+    library_id: str
+    format: str
+    output_name: str = "converted"
+    path_rules: str = ""
+    key_notation: str = ""
+    mp3_decoder: str = "MAD"
+    memory_cues_to_hot_cues: bool = True
+    rekordbox_memory_cues: bool = True
+    rekordbox_hot_cues_as_memory: bool = False
+    serato_root: str = "/"
+    serato_write_tags: bool = False
+    serato_max_hot_cues: int = 8
+    serato_base_database: str = ""
+    mixxx_base_database: str = ""
+    mixxx_playlists_as_crates: bool = False
+    playlists: list[str] = []
+
+
+def _tree(node: Playlist, parents: tuple[str, ...] = ()) -> list[dict[str, Any]]:
+    out = []
+    for child in node.children:
+        path = " / ".join((*parents, child.name))
+        if child.is_folder:
+            out.append(
+                {"name": child.name, "path": path, "children": _tree(child, (*parents, child.name))}
+            )
+        else:
+            out.append(
+                {
+                    "name": child.name,
+                    "path": path,
+                    "count": len(child.track_ids or []),
+                    "crate": child.is_crate,
+                }
+            )
+    return out
+
+
+def _common_folders(tracks: list[Track], limit: int = 6) -> list[dict[str, Any]]:
+    """The most common top folders, to suggest path rewrite rules."""
+    counts: Counter[str] = Counter()
+    for track in tracks:
+        parts = track.location.replace("\\", "/").split("/")
+        depth = 4 if parts and parts[0] == "" else 3
+        counts["/".join(parts[:depth])] += 1
+    return [{"folder": f, "tracks": n} for f, n in counts.most_common(limit)]
+
+
+def _track_row(track: Track) -> dict[str, Any]:
+    return {
+        "id": track.id,
+        "artist": track.artist,
+        "title": track.title or track.filename,
+        "bpm": round(track.bpm, 2),
+        "location": track.location,
+        "hot_cues": sum(1 for c in track.cues if c.slot is not None),
+        "memory_cues": sum(1 for c in track.cues if c.slot is None),
+        "grid": len(track.grid),
+    }
+
+
+@app.post("/api/inspect")
+def inspect(request: ReadRequest) -> dict[str, str]:
+    if request.format not in FORMATS:
+        raise HTTPException(400, "unknown format")
+    options = ReadOptions(
+        format=request.format,  # type: ignore[arg-type]
+        path=request.path,
+        access_rules=parse_rules(request.access_rules),
+        mp3_decoder=request.mp3_decoder,  # type: ignore[arg-type]
+        serato_root=request.serato_root or "/",
+        read_file_tags=request.read_file_tags,
+    )
+
+    def work(job: Job, progress: Any) -> dict[str, Any]:
+        progress("Reading library")
+        library = read_library(options, progress)
+        _libraries[job.id] = (options, library)
+        progress("Checking files")
+        resolve = make_resolver(options.access_rules)
+        tracks = list(library.tracks.values())
+        missing = [t for t in tracks if resolve(t.location) is None]
+        return {
+            "library_id": job.id,
+            "source": library.source,
+            "summary": library.summary() | {"missing_files": len(missing)},
+            "playlists": _tree(library.playlists),
+            "folders": _common_folders(tracks),
+            "missing_examples": [t.location for t in missing[:5]],
+            "warnings": library.warnings,
+        }
+
+    return {"job_id": _start("inspect", work).id}
+
+
+@app.get("/api/libraries/{library_id}/tracks")
+def tracks(library_id: str, playlist: str = "", q: str = "", limit: int = 200) -> dict[str, Any]:
+    if library_id not in _libraries:
+        raise HTTPException(404, "library not loaded; load it again")
+    library = _libraries[library_id][1]
+    if playlist:
+        ids = next(
+            (
+                p.track_ids or []
+                for parents, p in library.playlists.walk()
+                if " / ".join((*parents, p.name)) == playlist
+            ),
+            [],
+        )
+        selected = [library.tracks[i] for i in ids if i in library.tracks]
+    else:
+        selected = list(library.tracks.values())
+    if q:
+        needle = q.lower()
+        selected = [t for t in selected if needle in f"{t.artist} {t.title} {t.location}".lower()]
+    return {"total": len(selected), "tracks": [_track_row(t) for t in selected[:limit]]}
+
+
+@app.get("/api/libraries/{library_id}/tracks/{track_id}")
+def track_detail(library_id: str, track_id: str) -> dict[str, Any]:
+    if library_id not in _libraries or track_id not in _libraries[library_id][1].tracks:
+        raise HTTPException(404, "not found")
+    track = _libraries[library_id][1].tracks[track_id]
+    data = asdict(track)
+    data["date_added"] = track.date_added.isoformat() if track.date_added else None
+    data["key"] = " / ".join(format_key(track.key, n) for n in KeyNotation) if track.key else ""
+    return data
+
+
+def _safe_output(name: str) -> Path:
+    cleaned = "".join(c for c in name if c.isalnum() or c in " -_.").strip(" .") or "converted"
+    return EXPORT_DIR / cleaned
+
+
+@app.post("/api/convert")
+def convert(request: WriteRequest) -> dict[str, str]:
+    if request.library_id not in _libraries:
+        raise HTTPException(404, "library not loaded; load it again")
+    if request.format not in FORMATS:
+        raise HTTPException(400, "unknown format")
+    read_options, library = _libraries[request.library_id]
+    out = _safe_output(request.output_name)
+    options = WriteOptions(
+        format=request.format,  # type: ignore[arg-type]
+        output_dir=str(out),
+        path_rules=parse_rules(request.path_rules),
+        key_notation=KeyNotation(request.key_notation) if request.key_notation else None,
+        mp3_decoder=request.mp3_decoder,  # type: ignore[arg-type]
+        memory_cues_to_hot_cues=request.memory_cues_to_hot_cues,
+        rekordbox_memory_cues=request.rekordbox_memory_cues,
+        rekordbox_hot_cues_as_memory=request.rekordbox_hot_cues_as_memory,
+        serato_root=request.serato_root or "/",
+        serato_write_tags=request.serato_write_tags,
+        serato_max_hot_cues=request.serato_max_hot_cues,
+        serato_base_database=request.serato_base_database,
+        mixxx_base_database=request.mixxx_base_database,
+        mixxx_playlists_as_crates=request.mixxx_playlists_as_crates,
+        playlists=request.playlists,
+    )
+
+    def work(job: Job, progress: Any) -> dict[str, Any]:
+        progress("Converting")
+        result = write_library(library, options, read_options.access_rules, progress)
+        files = [str(Path(f).relative_to(EXPORT_DIR)) for f in result.files]
+        return result.as_dict() | {"files": files, "output_dir": str(out), "format": request.format}
+
+    return {"job_id": _start("convert", work).id}
+
+
+@app.get("/api/download")
+def download(path: str) -> Response:
+    target = (EXPORT_DIR / path).resolve()
+    if EXPORT_DIR not in target.parents and target != EXPORT_DIR:
+        raise HTTPException(403, "outside the export folder")
+    if target.is_file():
+        return FileResponse(target, filename=target.name)
+    if target.is_dir():
+        buffer = io.BytesIO()
+        with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
+            for file in sorted(target.rglob("*")):
+                if file.is_file():
+                    archive.write(file, file.relative_to(target))
+        return Response(
+            buffer.getvalue(),
+            media_type="application/zip",
+            headers={"Content-Disposition": f'attachment; filename="{target.name}.zip"'},
+        )
+    raise HTTPException(404, "not found")
+
+
+app.mount("/", StaticFiles(directory=Path(__file__).parent / "static", html=True), name="static")

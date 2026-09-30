@@ -1,0 +1,23 @@
+# Usage: mkdir -p export sources && docker compose up --build   then open http://localhost:8000
+#
+# Libraries store absolute paths to your tracks, so the music folder is mounted
+# at the same path inside the container as on your machine. Serato keeps cue
+# points and beat grids inside the audio files: to write them, start with
+# MUSIC_ACCESS=rw (the default mounts your music read-only).
+services:
+  dj-library-converter:
+    build: .
+    image: dj-library-converter
+    ports:
+      - "127.0.0.1:${PORT:-8000}:8000"
+    # Write files as you, not root. Override UID/GID if yours aren't 1000.
+    user: "${UID:-1000}:${GID:-1000}"
+    environment:
+      BROWSE_ROOTS: "/sources:/export:${MUSIC_DIR:-${HOME}/Music}"
+    volumes:
+      # Drop a rekordbox.xml, a mixxxdb.sqlite or a _Serato_ folder in ./sources.
+      - "./sources:/sources/files:ro"
+      - "${MIXXX_DIR:-${HOME}/.mixxx}:/sources/mixxx:ro"
+      - "${MUSIC_DIR:-${HOME}/Music}:${MUSIC_DIR:-${HOME}/Music}:${MUSIC_ACCESS:-ro}"
+      - "${EXPORT_DIR:-./export}:/export"
+    restart: unless-stopped
