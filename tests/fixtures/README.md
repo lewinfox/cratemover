@@ -13,3 +13,6 @@ Real files written by the DJ programs, used to check the parsers against more th
 
 Audio for the round-trip tests is generated at test time with ffmpeg (`tests/fakelib.py`).
 | `rekordbox/anlz/demo-track-1.DAT` | A Rekordbox analysis file (beat grid, cues, waveform) for "Demo Track 1" | [Holzhaus/rekordcrate](https://github.com/Holzhaus/rekordcrate) `data/complete_export/demo_tracks` (MPL-2.0) |
+| `rekordbox/stick-6.8.6/PIONEER/…` | A real Rekordbox 6.8.6 USB export: `export.pdb`, `exportExt.pdb`, OneLibrary `exportLibrary.db`, analysis files and settings for 2 tracks (artwork left out) | [acrilique/rekordlib](https://github.com/acrilique/rekordlib) `testdata/complete_export/with_anlz` @ `7802a31` (MPL-2.0) |
+| `rekordbox/export-3886-tracks.pdb.gz` | A large real `export.pdb` (3,886 tracks, 104 playlists, pages with deleted rows) | [Holzhaus/rekordcrate](https://github.com/Holzhaus/rekordcrate) `data/pdb/num_rows` @ `14d54ed` (MPL-2.0) |
+| `rekordbox/one-song-export.pdb` | A one-track `export.pdb` | [fragmede/rekordbox-pdb](https://github.com/fragmede/rekordbox-pdb) `tests/data` @ `ee3bac2` (MIT) |

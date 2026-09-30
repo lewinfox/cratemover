@@ -94,6 +94,9 @@ class Track:
     date_added: date | None = None
     cues: list[Cue] = field(default_factory=list)
     grid: list[TempoMarker] = field(default_factory=list)
+    # Format-specific extras that survive a conversion, e.g. "anlz": the path of
+    # a Rekordbox analysis file whose waveforms can be reused.
+    extra: dict[str, str] = field(default_factory=dict, compare=False, repr=False)
 
     @property
     def filename(self) -> str:

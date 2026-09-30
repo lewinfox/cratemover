@@ -95,7 +95,7 @@ dependencies = [
 
 [package.optional-dependencies]
 rekordbox = [
-    { name = "pyrekordbox" },
+    { name = "sqlcipher3-wheels" },
 ]
 web = [
     { name = "fastapi" },
@@ -106,6 +106,7 @@ web = [
 [package.dev-dependencies]
 dev = [
     { name = "httpx" },
+    { name = "pyrekordbox" },
     { name = "pytest" },
     { name = "ruff" },
 ]
@@ -114,8 +115,8 @@ dev = [
 requires-dist = [
     { name = "fastapi", marker = "extra == 'web'", specifier = ">=0.115" },
     { name = "mutagen", specifier = ">=1.47" },
-    { name = "pyrekordbox", marker = "extra == 'rekordbox'", specifier = ">=0.4" },
     { name = "python-multipart", marker = "extra == 'web'", specifier = ">=0.0.9" },
+    { name = "sqlcipher3-wheels", marker = "extra == 'rekordbox'", specifier = ">=0.5" },
     { name = "uvicorn", marker = "extra == 'web'", specifier = ">=0.30" },
 ]
 provides-extras = ["web", "rekordbox"]
@@ -123,6 +124,7 @@ provides-extras = ["web", "rekordbox"]
 [package.metadata.requires-dev]
 dev = [
     { name = "httpx", specifier = ">=0.27" },
+    { name = "pyrekordbox", specifier = ">=0.4" },
     { name = "pytest", specifier = ">=8.3" },
     { name = "ruff", specifier = ">=0.6" },
 ]

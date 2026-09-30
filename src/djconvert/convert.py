@@ -4,86 +4,50 @@ from __future__ import annotations
 
 import copy
 import os
+import shutil
+import tempfile
 from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Literal
 
 from . import grid as gridlib
 from .keys import KeyNotation
-from .mixxx import MixxxReadOptions, MixxxWriteOptions, read_mixxx, write_mixxx
-from .model import Library, Playlist, normalise_path
+from .mixxx import MixxxReadOptions, MixxxWriteOptions, find_database, read_mixxx, write_mixxx
+from .model import Library, Playlist
 from .offsets import Mp3Decoder
+from .paths import apply_rules, make_resolver
 from .rekordbox_xml import RekordboxWriteOptions, read_rekordbox_xml, write_rekordbox_xml
-from .serato.library import SeratoReadOptions, SeratoWriteOptions, read_serato, write_serato
+from .serato.library import (
+    CRATE_DIR,
+    DATABASE_FILE,
+    SeratoReadOptions,
+    SeratoWriteOptions,
+    find_serato_dir,
+    read_serato,
+    write_serato,
+)
+from .sync import Prefer, SyncOptions, merge
 
-Format = Literal["mixxx", "rekordbox_xml", "rekordbox_db", "serato"]
+Format = Literal["mixxx", "rekordbox_xml", "rekordbox_db", "rekordbox_usb", "serato"]
 FORMATS: dict[str, str] = {
     "mixxx": "Mixxx (mixxxdb.sqlite)",
+    "rekordbox_usb": "Rekordbox USB stick (PIONEER/export.pdb)",
     "rekordbox_xml": "Rekordbox XML",
     "rekordbox_db": "Rekordbox 6/7 library (master.db)",
-    "serato": "Serato (_Serato_ folder)",
+    "serato": "Serato (_Serato_ folder, computer or USB)",
 }
 SOURCE_FORMATS = FORMATS
 TARGET_FORMATS = {k: v for k, v in FORMATS.items() if k != "rekordbox_db"}
+SYNC_FORMATS = TARGET_FORMATS  # sync writes back in place
 
 Progress = Callable[[str], None]
+Resolver = Callable[[str], Path | None]
 
 
 def _noop(_: str) -> None:
     pass
-
-
-# --- paths ---------------------------------------------------------------------------
-
-
-def apply_rules(path: str, rules: list[tuple[str, str]]) -> str:
-    """Replace the longest matching prefix. Matching ignores slash direction and case."""
-    norm = normalise_path(path)
-    best: tuple[str, str] | None = None
-    for old, new in rules:
-        old_n = normalise_path(old).rstrip("/")
-        if not old_n:
-            continue
-        if (norm.lower() == old_n.lower() or norm.lower().startswith(old_n.lower() + "/")) and (
-            best is None or len(old_n) > len(normalise_path(best[0]).rstrip("/"))
-        ):
-            best = (old, new)
-    if best is None:
-        return path
-    old_n = normalise_path(best[0]).rstrip("/")
-    new = best[1].rstrip("/\\")
-    rest = norm[len(old_n) :]
-    result = new + rest
-    return result.replace("/", "\\") if "\\" in best[1] else result
-
-
-def parse_rules(text: str | list[Any] | None) -> list[tuple[str, str]]:
-    """Rules as ``[[from, to], ...]`` or lines of ``from => to``."""
-    if not text:
-        return []
-    if isinstance(text, list):
-        return [(str(a), str(b)) for a, b in text if str(a).strip()]
-    rules = []
-    for line in text.splitlines():
-        if "=>" in line:
-            old, new = line.split("=>", 1)
-            if old.strip():
-                rules.append((old.strip(), new.strip()))
-    return rules
-
-
-def make_resolver(access_rules: list[tuple[str, str]]) -> Callable[[str], Path | None]:
-    """Library location -> an existing local file, applying the file-access rules."""
-
-    def resolve(location: str) -> Path | None:
-        candidate = apply_rules(location, access_rules)
-        if len(candidate) >= 2 and candidate[1] == ":" and os.name != "nt":
-            return None  # a Windows path we have no mapping for
-        path = Path(candidate)
-        return path if path.is_file() else None
-
-    return resolve
 
 
 # --- options -------------------------------------------------------------------------
@@ -118,6 +82,13 @@ class WriteOptions:
     # Mixxx
     mixxx_base_database: str = ""
     mixxx_playlists_as_crates: bool = False
+    # USB sticks (Rekordbox, and Serato with serato_root set to the stick)
+    copy_missing: bool = True  # copy tracks that aren't on the stick onto it
+    waveforms: bool = True  # measure Rekordbox waveforms with ffmpeg
+    device_name: str = ""
+    onelibrary: str = "auto"  # "auto" | "on" | "off"
+    # Update the library at output_dir in place (with backups) instead of writing a new one
+    in_place: bool = False
     # Selection: playlist paths ("Folder / Name"); empty means everything
     playlists: list[str] = field(default_factory=list)
 
@@ -135,6 +106,10 @@ def read_library(options: ReadOptions, progress: Progress = _noop) -> Library:
         from .rekordbox_db import read_rekordbox_db
 
         library = read_rekordbox_db(path, progress)
+    elif options.format == "rekordbox_usb":
+        from .pioneer.usb import read_rekordbox_usb
+
+        library = read_rekordbox_usb(path, progress)
     elif options.format == "serato":
         library = read_serato(
             path,
@@ -146,6 +121,8 @@ def read_library(options: ReadOptions, progress: Progress = _noop) -> Library:
         raise ValueError(f"unknown source format {options.format!r}")
     for track in library.tracks.values():
         track.grid = gridlib.simplify(track.grid)
+        if found := resolve(track.location):
+            track.extra["local"] = str(found)
     return library
 
 
@@ -189,6 +166,37 @@ class ConvertResult:
         return asdict(self)
 
 
+def _backup(path: Path, stamp: str) -> Path | None:
+    if not path.exists():
+        return None
+    backup = path.with_name(f"{path.name}.djconvert-{stamp}")
+    if path.is_dir():
+        shutil.copytree(path, backup)
+    else:
+        shutil.copy2(path, backup)
+    return backup
+
+
+def _place_on_drive(
+    library: Library, root: Path, resolve: Resolver, result_warnings: list[str]
+) -> int:
+    """Copy tracks that aren't on the drive at ``root`` onto it (for Serato USB sticks)."""
+    from .pioneer.usb import _copy_to_stick, _stick_path
+
+    copied = 0
+    for track in library.tracks.values():
+        local = resolve(track.location)
+        if local is None or _stick_path(local, root) is not None:
+            continue
+        stick_path, was_copied = _copy_to_stick(local, track, root)
+        track.location = str(root) + stick_path
+        track.extra["local"] = str(root) + stick_path
+        copied += was_copied
+    if copied:
+        result_warnings.append(f"Copied {copied} track(s) onto {root}.")
+    return copied
+
+
 def write_library(
     library: Library,
     options: WriteOptions,
@@ -200,20 +208,30 @@ def write_library(
     source_resolve = make_resolver(access_rules)
     local: dict[str, Path | None] = {}
     for track in library.tracks.values():
-        found = source_resolve(track.location)
+        known = Path(track.extra["local"]) if "local" in track.extra else None
+        found = known if known is not None and known.is_file() else source_resolve(track.location)
         track.location = apply_rules(track.location, options.path_rules)
         local[track.location] = found
+        if found is not None:
+            track.extra["local"] = str(found)
 
     def resolve(location: str) -> Path | None:
-        return local.get(location)
+        if location in local:
+            return local[location]
+        path = Path(location)
+        return path if path.is_file() else None
 
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     out = Path(options.output_dir)
-    out.mkdir(parents=True, exist_ok=True)
     warnings = list(library.warnings)
+    files: list[Path] = []
     if options.format == "rekordbox_xml":
+        target = out if out.suffix.lower() == ".xml" else out / "rekordbox.xml"
+        if options.in_place:
+            _backup(target, stamp)
         rb = write_rekordbox_xml(
             library,
-            out / "rekordbox.xml",
+            target,
             RekordboxWriteOptions(
                 key_notation=options.key_notation or KeyNotation.CAMELOT,
                 memory_cues=options.rekordbox_memory_cues,
@@ -221,21 +239,61 @@ def write_library(
             ),
         )
         files, warnings = rb.files, warnings + rb.warnings
+    elif options.format == "rekordbox_usb":
+        from .pioneer.usb import UsbWriteOptions, write_rekordbox_usb
+
+        usb = write_rekordbox_usb(
+            library,
+            out,
+            UsbWriteOptions(
+                copy_missing=options.copy_missing,
+                key_notation=options.key_notation or KeyNotation.MUSICAL,
+                waveforms=options.waveforms,
+                device_name=options.device_name,
+                onelibrary=options.onelibrary,
+            ),
+            resolve,
+            progress,
+        )
+        files, warnings = usb.files, warnings + usb.warnings
+        warnings.insert(
+            0,
+            f"{usb.tracks} track(s) on the stick: {usb.copied} copied, {usb.transcoded} converted to MP3; "
+            f"waveforms {usb.reused} reused, {usb.measured} measured, {usb.placeholders} placeholders.",
+        )
     elif options.format == "serato":
+        serato_root = options.serato_root or "/"
+        if options.in_place:
+            try:
+                serato_dir = find_serato_dir(out)
+            except FileNotFoundError:
+                serato_dir = out / "_Serato_"
+            out = serato_dir.parent
+            base = serato_dir / DATABASE_FILE
+            _backup(base, stamp)
+            _backup(serato_dir / CRATE_DIR, stamp)
+            base_database = base if base.is_file() else None
+        else:
+            out.mkdir(parents=True, exist_ok=True)
+            base_database = (
+                Path(options.serato_base_database) if options.serato_base_database else None
+            )
+        if serato_root not in ("", "/") and options.copy_missing:
+            _place_on_drive(library, Path(serato_root), resolve, warnings)
         se = write_serato(
             library,
             out,
             SeratoWriteOptions(
-                volume_root=options.serato_root,
+                volume_root=serato_root,
                 key_notation=options.key_notation or KeyNotation.MUSICAL,
                 write_file_tags=options.serato_write_tags,
                 max_hot_cues=options.serato_max_hot_cues,
                 memory_cues_to_hot_cues=options.memory_cues_to_hot_cues,
-                base_database=Path(options.serato_base_database)
-                if options.serato_base_database
-                else None,
+                base_database=base_database,
             ),
-            resolve,
+            lambda location: (
+                resolve(location) or (Path(location) if Path(location).is_file() else None)
+            ),
             progress,
         )
         files, warnings = se.files, warnings + se.warnings
@@ -247,27 +305,108 @@ def write_library(
         else:
             warnings.insert(0, f"Serato tags written to {se.tags_written} audio file(s).")
     elif options.format == "mixxx":
-        mx = write_mixxx(
-            library,
-            out,
-            MixxxWriteOptions(
-                mp3_decoder=options.mp3_decoder,
-                base_database=Path(options.mixxx_base_database)
-                if options.mixxx_base_database
-                else None,
-                playlists_as_crates=options.mixxx_playlists_as_crates,
-                memory_cues_to_hot_cues=options.memory_cues_to_hot_cues,
-                key_notation=options.key_notation or KeyNotation.MUSICAL,
-            ),
-            resolve,
-            progress,
+        mixxx_options = MixxxWriteOptions(
+            mp3_decoder=options.mp3_decoder,
+            base_database=Path(options.mixxx_base_database)
+            if options.mixxx_base_database
+            else None,
+            playlists_as_crates=options.mixxx_playlists_as_crates,
+            memory_cues_to_hot_cues=options.memory_cues_to_hot_cues,
+            key_notation=options.key_notation or KeyNotation.MUSICAL,
         )
+        if options.in_place:
+            db_path = find_database(out)
+            _backup(db_path, stamp)
+            mixxx_options.base_database = db_path
+            mixxx_options.replace_playlists = True
+            with tempfile.TemporaryDirectory(dir=db_path.parent) as tmp:
+                mx = write_mixxx(library, Path(tmp), mixxx_options, resolve, progress)
+                os.replace(Path(tmp) / "mixxxdb.sqlite", db_path)
+            mx.files = [db_path]
+        else:
+            out.mkdir(parents=True, exist_ok=True)
+            mx = write_mixxx(library, out, mixxx_options, resolve, progress)
         files, warnings = mx.files, warnings + mx.warnings
     else:
-        raise ValueError(f"unknown target format {options.format!r}")
+        raise ValueError(f"cannot write {options.format!r}")
     missing = sum(1 for p in local.values() if p is None)
     if missing and options.format != "rekordbox_xml":
         warnings.append(
             f"{missing} of {len(local)} track file(s) were not found locally (check the file access rules)."
         )
+    if options.in_place:
+        warnings.append(f"Backups of the previous files end in .djconvert-{stamp}.")
     return ConvertResult([str(f) for f in files], library.summary(), warnings)
+
+
+# --- sync ----------------------------------------------------------------------------
+
+
+@dataclass
+class SyncSide:
+    read: ReadOptions
+    write: WriteOptions  # format/output_dir are filled in from ``read``
+
+
+@dataclass
+class SyncResult:
+    a_to_b: dict[str, Any] | None = None
+    b_to_a: dict[str, Any] | None = None
+
+    def as_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+def invert_rules(rules: list[tuple[str, str]]) -> list[tuple[str, str]]:
+    return [(new, old) for old, new in rules]
+
+
+def sync_libraries(
+    a: SyncSide,
+    b: SyncSide,
+    direction: Literal["a_to_b", "b_to_a", "both"],
+    options: SyncOptions,
+    dry_run: bool = False,
+    progress: Progress = _noop,
+) -> SyncResult:
+    """Merge A into B and/or B into A and write the results in place.
+
+    ``options.path_rules`` map A's paths to B's; they are inverted for B -> A.
+    """
+    progress("Reading library A")
+    lib_a = read_library(a.read, progress)
+    progress("Reading library B")
+    lib_b = read_library(b.read, progress)
+    result = SyncResult()
+    rules_ab = options.path_rules
+    jobs = []
+    if direction in ("a_to_b", "both"):
+        jobs.append(("a_to_b", lib_b, lib_a, b, rules_ab))
+    if direction in ("b_to_a", "both"):
+        # A two-way sync keeps one preference: flip it so the same side wins both times.
+        jobs.append(("b_to_a", lib_a, lib_b, a, invert_rules(rules_ab)))
+    for name, base, incoming, side, rules in jobs:
+        opts = copy.copy(options)
+        opts.path_rules = rules
+        if direction == "both" and name == "b_to_a":
+            opts.prefer = Prefer.BASE if options.prefer is Prefer.INCOMING else Prefer.INCOMING
+        progress(f"Merging ({name.replace('_', ' ')})")
+        merged, report = merge(base, incoming, opts)
+        outcome: dict[str, Any] = {"report": report.as_dict(), "summary": merged.summary()}
+        if not dry_run and (
+            report.added or report.updated or report.playlists_added or report.playlists_updated
+        ):
+            write = copy.copy(side.write)
+            write.format = side.read.format
+            write.output_dir = side.read.path
+            write.in_place = True
+            write.path_rules = []
+            write.playlists = []
+            if side.read.format == "serato":
+                write.serato_root = side.read.serato_root
+            progress(f"Writing ({name.replace('_', ' ')})")
+            outcome["written"] = write_library(
+                merged, write, side.read.access_rules, progress
+            ).as_dict()
+        setattr(result, name, outcome)
+    return result

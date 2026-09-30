@@ -16,9 +16,9 @@ web = [
   "uvicorn>=0.30",
   "python-multipart>=0.0.9",
 ]
-# Reading Rekordbox 6/7's encrypted master.db and its ANLZ analysis files.
+# Reading Rekordbox 6/7's encrypted master.db and OneLibrary (exportLibrary.db).
 rekordbox = [
-  "pyrekordbox>=0.4",
+  "sqlcipher3-wheels>=0.5",
 ]
 
 [project.scripts]
@@ -27,6 +27,7 @@ djconvert = "djconvert.cli:main"
 [dependency-groups]
 dev = [
   "httpx>=0.27",
+  "pyrekordbox>=0.4",  # independent ANLZ parser for tests
   "pytest>=8.3",
   "ruff>=0.6",
 ]
@@ -43,6 +44,7 @@ module-name = "djconvert"
 
 [tool.ruff]
 line-length = 100
+extend-exclude = ["tests/oracles"]
 target-version = "py311"
 
 [tool.ruff.lint]

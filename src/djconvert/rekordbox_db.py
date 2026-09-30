@@ -1,8 +1,8 @@
 """Read Rekordbox 6/7's own library: ``master.db`` plus its ANLZ analysis files.
 
-``master.db`` is an SQLCipher-encrypted SQLite database; pyrekordbox ships the
-(publicly known) key and the SQLCipher bindings, so this module needs the
-``rekordbox`` extra. Tracks, cues and playlists are in the database; beat grids
+``master.db`` is an SQLCipher-encrypted SQLite database with a publicly known
+key (see :mod:`djconvert.pioneer.keys`); opening it needs the ``rekordbox``
+extra (sqlcipher3). Tracks, cues and playlists are in the database; beat grids
 are only in the analysis files (``share/PIONEER/USBANLZ/…/ANLZ0000.DAT``, the
 ``PQTZ`` tag), so point this at the whole Rekordbox folder:
 
@@ -25,6 +25,8 @@ from typing import Any
 from .colours import REKORDBOX_CUE_COLOURS, REKORDBOX_TRACK_COLOURS
 from .keys import parse_key
 from .model import Cue, CueRole, Library, Playlist, TempoMarker, Track
+from .pioneer import anlz
+from .pioneer.keys import MASTER_DB, open_encrypted
 
 # djmdCue.Kind: 0 is a memory cue; hot cues A-H skip 4 (pyrekordbox docs / observed exports).
 _HOT_CUE_KIND = {1: 0, 2: 1, 3: 2, 5: 3, 6: 4, 7: 5, 8: 6, 9: 7}
@@ -49,22 +51,7 @@ def _connect(db_path: Path, workdir: Path) -> Any:
         plain = f.read(16) == b"SQLite format 3\x00"
     if plain:
         return sqlite3.connect(copy)
-    try:
-        from pyrekordbox.utils import deobfuscate
-        from sqlcipher3 import dbapi2 as sqlcipher
-
-        try:
-            from pyrekordbox.masterdb.database import BLOB
-        except ImportError:  # pyrekordbox < 0.5
-            from pyrekordbox.db6.database import BLOB
-    except ImportError as exc:  # pragma: no cover - depends on the extra
-        raise RuntimeError(
-            "reading an encrypted master.db needs the 'rekordbox' extra (pyrekordbox)"
-        ) from exc
-    conn = sqlcipher.connect(str(copy))
-    conn.execute(f"PRAGMA key = '{deobfuscate(BLOB)}'")
-    conn.execute("SELECT count(*) FROM sqlite_master").fetchone()  # fails if the key is wrong
-    return conn
+    return open_encrypted(copy, MASTER_DB)
 
 
 def _columns(conn: Any, table: str) -> set[str]:
@@ -79,28 +66,8 @@ def _date(value: object) -> date | None:
 
 
 def grid_from_anlz(path: Path) -> list[TempoMarker]:
-    """Tempo sections from an ANLZ file's PQTZ beat grid (one entry per beat)."""
-    from pyrekordbox.anlz import AnlzFile
-
-    anlz = AnlzFile.parse_file(path)
-    if "PQTZ" not in anlz.tag_types:
-        return []
-    beats, bpms, times = anlz.get("beat_grid")
-    grid: list[TempoMarker] = []
-    count = 0  # beats since the current section started
-    for beat, bpm, time in zip(beats, bpms, times, strict=False):
-        if bpm <= 0:
-            continue
-        ms = float(time) * 1000.0
-        if grid:
-            count += 1
-            expected = grid[-1].position_ms + count * 60000.0 / grid[-1].bpm
-            # Times are whole milliseconds, so allow a little drift before calling it an edit.
-            if abs(grid[-1].bpm - float(bpm)) < 0.001 and abs(ms - expected) <= 2.0:
-                continue
-        grid.append(TempoMarker(ms, float(bpm), int(beat) or 1))
-        count = 0
-    return grid
+    """Tempo sections from an analysis file's PQTZ beat grid."""
+    return anlz.read_grid(anlz.AnlzFile.parse(path.read_bytes()))
 
 
 def read_rekordbox_db(
@@ -225,12 +192,13 @@ def read_rekordbox_db(
 
     if read_grids:
         missing = 0
-        for n, (track_id, anlz) in enumerate(anlz_paths.items(), 1):
+        for n, (track_id, anlz_path) in enumerate(anlz_paths.items(), 1):
             if n % 500 == 0:
                 progress(f"Reading beat grids {n}/{len(anlz_paths)}")
             try:
-                library.tracks[track_id].grid = grid_from_anlz(anlz)
-            except (OSError, AssertionError, ValueError):
+                library.tracks[track_id].grid = grid_from_anlz(anlz_path)
+                library.tracks[track_id].extra["anlz"] = str(anlz_path)
+            except (OSError, ValueError, IndexError):
                 missing += 1
         if missing:
             library.warnings.append(

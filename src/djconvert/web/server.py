@@ -34,13 +34,12 @@ from ..convert import (
     TARGET_FORMATS,
     ReadOptions,
     WriteOptions,
-    make_resolver,
-    parse_rules,
     read_library,
     write_library,
 )
 from ..keys import KeyNotation, format_key
 from ..model import Library, Playlist, Track
+from ..paths import make_resolver, parse_rules
 
 EXPORT_DIR = Path(os.environ.get("EXPORT_DIR", "export")).resolve()
 UPLOAD_DIR = Path(os.environ.get("UPLOAD_DIR") or tempfile.mkdtemp(prefix="djconvert-uploads-"))

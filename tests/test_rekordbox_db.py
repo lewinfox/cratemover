@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 from conftest import FIXTURES
 
-pytest.importorskip("pyrekordbox")
+pytest.importorskip("sqlcipher3")
 
 from djconvert.rekordbox_db import grid_from_anlz, read_rekordbox_db
 

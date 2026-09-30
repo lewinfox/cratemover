@@ -327,6 +327,7 @@ class MixxxWriteOptions:
     overwrite_existing: bool = True  # replace cues/grid of tracks already in the base database
     memory_cues_to_hot_cues: bool = True
     key_notation: KeyNotation = KeyNotation.MUSICAL
+    replace_playlists: bool = False  # reuse same-named playlists/crates instead of adding "(2)"
 
 
 @dataclass
@@ -552,20 +553,33 @@ def write_mixxx(
         name = " / ".join((*parents, playlist.name))
         ids = [track_ids[t] for t in playlist.track_ids or [] if t in track_ids]
         if playlist.is_crate or options.playlists_as_crates:
-            cid = db.execute(
-                "INSERT INTO crates (name) VALUES (?)", (_unique(name, crate_names),)
-            ).lastrowid
+            row = db.execute("SELECT id FROM crates WHERE name = ?", (name,)).fetchone()
+            if row and options.replace_playlists:
+                cid = row[0]
+                db.execute("DELETE FROM crate_tracks WHERE crate_id = ?", (cid,))
+            else:
+                cid = db.execute(
+                    "INSERT INTO crates (name) VALUES (?)", (_unique(name, crate_names),)
+                ).lastrowid
             db.executemany(
                 "INSERT OR IGNORE INTO crate_tracks (crate_id, track_id) VALUES (?, ?)",
                 [(cid, t) for t in ids],
             )
         else:
-            position += 1
-            pid = db.execute(
-                """INSERT INTO Playlists (name, position, hidden, date_created, date_modified)
-                   VALUES (?, ?, 0, ?, ?)""",
-                (_unique(name, playlist_names), position, now, now),
-            ).lastrowid
+            row = db.execute(
+                "SELECT id FROM Playlists WHERE name = ? AND hidden = 0", (name,)
+            ).fetchone()
+            if row and options.replace_playlists:
+                pid = row[0]
+                db.execute("DELETE FROM PlaylistTracks WHERE playlist_id = ?", (pid,))
+                db.execute("UPDATE Playlists SET date_modified = ? WHERE id = ?", (now, pid))
+            else:
+                position += 1
+                pid = db.execute(
+                    """INSERT INTO Playlists (name, position, hidden, date_created, date_modified)
+                       VALUES (?, ?, 0, ?, ?)""",
+                    (_unique(name, playlist_names), position, now, now),
+                ).lastrowid
             db.executemany(
                 "INSERT INTO PlaylistTracks (playlist_id, track_id, position, pl_datetime_added) "
                 "VALUES (?, ?, ?, ?)",

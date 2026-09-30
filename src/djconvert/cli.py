@@ -11,12 +11,12 @@ from .convert import (
     TARGET_FORMATS,
     ReadOptions,
     WriteOptions,
-    parse_rules,
     read_library,
     write_library,
 )
 from .keys import KeyNotation
 from .offsets import MP3_DECODERS
+from .paths import parse_rules
 
 
 def _add_read_args(parser: argparse.ArgumentParser) -> None:

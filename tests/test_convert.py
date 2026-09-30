@@ -9,12 +9,11 @@ from conftest import FIXTURES
 from djconvert.convert import (
     ReadOptions,
     WriteOptions,
-    apply_rules,
-    parse_rules,
     read_library,
     write_library,
 )
 from djconvert.model import CueRole, Library, Track
+from djconvert.paths import apply_rules, parse_rules
 from djconvert.serato.library import from_serato_path, to_serato_path
 
 
