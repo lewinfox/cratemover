@@ -157,3 +157,15 @@ def test_selection(mixxx_root: Path, tmp_path: Path) -> None:
         "gridded": 3,
     }
     assert len(source.tracks) == 6  # the source library is not modified
+
+
+def test_serato_sample_rate_text() -> None:
+    from djconvert.serato.library import _sample_rate
+
+    assert [_sample_rate(t) for t in ("44100", "44.1", "44.1k", "48.0 kHz", "")] == [
+        44100,
+        44100,
+        44100,
+        48000,
+        0,
+    ]
