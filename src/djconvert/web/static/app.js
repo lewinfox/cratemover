@@ -6,6 +6,8 @@ const state = { info: null, library: null, selected: new Set(), currentPlaylist:
 const HINTS = {
   mixxx: "Mixxx's mixxxdb.sqlite, or the folder holding it (~/.mixxx on Linux).",
   rekordbox_xml: "In Rekordbox: File › Export Collection in xml format. Choose or upload that file.",
+  rekordbox_db: "Rekordbox 6/7's own library: the rekordbox folder (~/Library/Pioneer/rekordbox on a Mac, " +
+    "%APPDATA%\\Pioneer\\rekordbox on Windows) or its master.db. Beat grids come from its share/ folder.",
   serato: "The _Serato_ folder (~/Music/_Serato_, or the root of an external drive), or its parent. " +
     "Cue points and beat grids are read from the music files, so they must be reachable too.",
 };
@@ -72,10 +74,10 @@ function stat(label, value) {
 
 async function init() {
   state.info = await api("/api/info");
-  for (const select of [$("src-format"), $("dst-format")]) {
-    select.innerHTML = Object.entries(state.info.formats)
-      .map(([k, v]) => `<option value="${k}">${escapeHtml(v)}</option>`).join("");
-  }
+  const options = (formats) => Object.entries(formats)
+    .map(([k, v]) => `<option value="${k}">${escapeHtml(v)}</option>`).join("");
+  $("src-format").innerHTML = options(state.info.source_formats);
+  $("dst-format").innerHTML = options(state.info.target_formats);
   $("dst-format").value = "rekordbox_xml";
   $("src-format").addEventListener("change", onSourceFormat);
   $("dst-format").addEventListener("change", () => showFor("data-show-dst", $("dst-format").value));
@@ -234,7 +236,7 @@ function renderLibrary(lib) {
   $("result-card").classList.add("hidden");
   const src = $("src-format").value;
   if ($("dst-format").value === src) {
-    $("dst-format").value = Object.keys(state.info.formats).find((f) => f !== src);
+    $("dst-format").value = Object.keys(state.info.target_formats).find((f) => f !== src);
     showFor("data-show-dst", $("dst-format").value);
   }
   showTracks("");

@@ -30,6 +30,8 @@ from pydantic import BaseModel
 from .. import __version__
 from ..convert import (
     FORMATS,
+    SOURCE_FORMATS,
+    TARGET_FORMATS,
     ReadOptions,
     WriteOptions,
     make_resolver,
@@ -107,6 +109,8 @@ def info() -> dict[str, Any]:
     return {
         "version": __version__,
         "formats": FORMATS,
+        "source_formats": SOURCE_FORMATS,
+        "target_formats": TARGET_FORMATS,
         "key_notations": [k.value for k in KeyNotation],
         "export_dir": str(EXPORT_DIR),
         "browse_roots": [str(p) for p in BROWSE_ROOTS if p.exists()],
@@ -130,6 +134,8 @@ def _suggest_sources() -> list[dict[str, str]]:
             ("*/database V2", "serato"),
             ("*.xml", "rekordbox_xml"),
             ("*/*.xml", "rekordbox_xml"),
+            ("master.db", "rekordbox_db"),
+            ("*/master.db", "rekordbox_db"),
         ):
             try:
                 for match in sorted(root.glob(depth_glob))[:10]:
@@ -359,7 +365,7 @@ def _safe_output(name: str) -> Path:
 def convert(request: WriteRequest) -> dict[str, str]:
     if request.library_id not in _libraries:
         raise HTTPException(404, "library not loaded; load it again")
-    if request.format not in FORMATS:
+    if request.format not in TARGET_FORMATS:
         raise HTTPException(400, "unknown format")
     read_options, library = _libraries[request.library_id]
     out = _safe_output(request.output_name)

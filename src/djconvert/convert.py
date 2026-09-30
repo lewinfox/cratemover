@@ -17,12 +17,15 @@ from .offsets import Mp3Decoder
 from .rekordbox_xml import RekordboxWriteOptions, read_rekordbox_xml, write_rekordbox_xml
 from .serato.library import SeratoReadOptions, SeratoWriteOptions, read_serato, write_serato
 
-Format = Literal["mixxx", "rekordbox_xml", "serato"]
+Format = Literal["mixxx", "rekordbox_xml", "rekordbox_db", "serato"]
 FORMATS: dict[str, str] = {
     "mixxx": "Mixxx (mixxxdb.sqlite)",
     "rekordbox_xml": "Rekordbox XML",
+    "rekordbox_db": "Rekordbox 6/7 library (master.db)",
     "serato": "Serato (_Serato_ folder)",
 }
+SOURCE_FORMATS = FORMATS
+TARGET_FORMATS = {k: v for k, v in FORMATS.items() if k != "rekordbox_db"}
 
 Progress = Callable[[str], None]
 
@@ -128,6 +131,10 @@ def read_library(options: ReadOptions, progress: Progress = _noop) -> Library:
         )
     elif options.format == "rekordbox_xml":
         library = read_rekordbox_xml(path)
+    elif options.format == "rekordbox_db":
+        from .rekordbox_db import read_rekordbox_db
+
+        library = read_rekordbox_db(path, progress)
     elif options.format == "serato":
         library = read_serato(
             path,

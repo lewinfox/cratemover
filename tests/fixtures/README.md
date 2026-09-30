@@ -12,3 +12,4 @@ Real files written by the DJ programs, used to check the parsers against more th
 | `mixxx_schema.xml` | *(in the package)* Mixxx's `res/schema.xml` | Mixxx (GPL-2.0-or-later) |
 
 Audio for the round-trip tests is generated at test time with ffmpeg (`tests/fakelib.py`).
+| `rekordbox/anlz/demo-track-1.DAT` | A Rekordbox analysis file (beat grid, cues, waveform) for "Demo Track 1" | [Holzhaus/rekordcrate](https://github.com/Holzhaus/rekordcrate) `data/complete_export/demo_tracks` (MPL-2.0) |

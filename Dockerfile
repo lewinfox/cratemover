@@ -12,11 +12,11 @@ WORKDIR /app
 RUN --mount=type=cache,target=/root/.cache/uv \
     --mount=type=bind,source=uv.lock,target=uv.lock \
     --mount=type=bind,source=pyproject.toml,target=pyproject.toml \
-    uv sync --locked --no-install-project --no-dev --extra web
+    uv sync --locked --no-install-project --no-dev --extra web --extra rekordbox
 COPY pyproject.toml uv.lock README.md LICENSE ./
 COPY src ./src
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --locked --no-dev --extra web --no-editable
+    uv sync --locked --no-dev --extra web --extra rekordbox --no-editable
 
 # --- runtime -------------------------------------------------------------------------
 FROM ${PYTHON_IMAGE}

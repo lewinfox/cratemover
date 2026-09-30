@@ -18,6 +18,8 @@ services:
       # Drop a rekordbox.xml, a mixxxdb.sqlite or a _Serato_ folder in ./sources.
       - "./sources:/sources/files:ro"
       - "${MIXXX_DIR:-${HOME}/.mixxx}:/sources/mixxx:ro"
+      # Rekordbox 6/7's folder: ~/Library/Pioneer/rekordbox (macOS), %APPDATA%/Pioneer/rekordbox (Windows).
+      - "${REKORDBOX_DIR:-./sources/rekordbox}:/sources/rekordbox:ro"
       - "${MUSIC_DIR:-${HOME}/Music}:${MUSIC_DIR:-${HOME}/Music}:${MUSIC_ACCESS:-ro}"
       - "${EXPORT_DIR:-./export}:/export"
     restart: unless-stopped

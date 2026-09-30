@@ -16,6 +16,10 @@ web = [
   "uvicorn>=0.30",
   "python-multipart>=0.0.9",
 ]
+# Reading Rekordbox 6/7's encrypted master.db and its ANLZ analysis files.
+rekordbox = [
+  "pyrekordbox>=0.4",
+]
 
 [project.scripts]
 djconvert = "djconvert.cli:main"

@@ -6,15 +6,24 @@ import argparse
 import json
 import sys
 
-from .convert import FORMATS, ReadOptions, WriteOptions, parse_rules, read_library, write_library
+from .convert import (
+    SOURCE_FORMATS,
+    TARGET_FORMATS,
+    ReadOptions,
+    WriteOptions,
+    parse_rules,
+    read_library,
+    write_library,
+)
 from .keys import KeyNotation
 from .offsets import MP3_DECODERS
 
 
 def _add_read_args(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("--from", dest="source_format", required=True, choices=FORMATS)
+    parser.add_argument("--from", dest="source_format", required=True, choices=SOURCE_FORMATS)
     parser.add_argument(
-        "source", help="mixxxdb.sqlite (or its folder), rekordbox.xml, or _Serato_ folder"
+        "source",
+        help="mixxxdb.sqlite (or its folder), rekordbox.xml, Rekordbox folder/master.db, or _Serato_ folder",
     )
     parser.add_argument(
         "--access",
@@ -56,7 +65,7 @@ def main(argv: list[str] | None = None) -> int:
 
     convert = sub.add_parser("convert", help="convert a library")
     _add_read_args(convert)
-    convert.add_argument("--to", dest="target_format", required=True, choices=FORMATS)
+    convert.add_argument("--to", dest="target_format", required=True, choices=TARGET_FORMATS)
     convert.add_argument("output", help="output folder")
     convert.add_argument(
         "--path",

@@ -4,11 +4,14 @@ Convert DJ libraries between **Mixxx**, **Rekordbox** and **Serato**: tracks and
 playlists, crates, hot cues, memory cues, loops and beat grids. It has a web UI (Docker) and a
 command line.
 
-| From \ To      | Mixxx | Rekordbox XML | Serato |
-|----------------|:-----:|:-------------:|:------:|
-| Mixxx          |   ✓   |       ✓       |   ✓    |
-| Rekordbox XML  |   ✓   |       ✓       |   ✓    |
-| Serato         |   ✓   |       ✓       |   ✓    |
+| From \ To                          | Mixxx | Rekordbox XML | Serato |
+|------------------------------------|:-----:|:-------------:|:------:|
+| Mixxx                              |   ✓   |       ✓       |   ✓    |
+| Rekordbox XML                      |   ✓   |       ✓       |   ✓    |
+| Rekordbox 6/7 library (`master.db`)|   ✓   |       ✓       |   ✓    |
+| Serato                             |   ✓   |       ✓       |   ✓    |
+
+Rekordbox is written as XML, which Rekordbox imports; its own database is only read.
 
 Everything goes through one format-neutral model (`src/djconvert/model.py`), so every
 reader works with every writer.
@@ -27,6 +30,7 @@ docker compose up --build        # then open http://localhost:8000
 | Variable       | Default     | Mounted at                | What                                                        |
 |----------------|-------------|---------------------------|-------------------------------------------------------------|
 | `MIXXX_DIR`    | `~/.mixxx`  | `/sources/mixxx` (ro)     | Mixxx's settings folder with `mixxxdb.sqlite`               |
+| `REKORDBOX_DIR`| `./sources/rekordbox` | `/sources/rekordbox` (ro) | Rekordbox 6/7's folder (`~/Library/Pioneer/rekordbox`, `%APPDATA%\Pioneer\rekordbox`) |
 | —              | `./sources` | `/sources/files` (ro)     | Drop a `rekordbox.xml`, `mixxxdb.sqlite` or `_Serato_` here |
 | `MUSIC_DIR`    | `~/Music`   | **the same path** (ro)    | Your music (a Mac's `~/Music/_Serato_` comes with it)       |
 | `MUSIC_ACCESS` | `ro`        |                           | Set to `rw` to let it write Serato tags into the files      |
@@ -59,7 +63,8 @@ uv run djconvert serve           # the web UI on http://127.0.0.1:8000
 ## Using it
 
 1. **Source.** Pick the format and the library (`mixxxdb.sqlite`; a Rekordbox XML from
-   *File › Export Collection in xml format*; or a `_Serato_` folder). For Serato, say which drive
+   *File › Export Collection in xml format*; Rekordbox 6/7's folder with `master.db` and
+   `share/`; or a `_Serato_` folder). For Serato, say which drive
    root its paths are relative to (`/` for `~/Music/_Serato_` on a Mac, `C:/` on Windows, the
    mount point for an external drive's own `_Serato_`).
 2. **Look.** Stats, warnings (e.g. files it cannot see), the playlist tree, and per-track cues
@@ -101,6 +106,12 @@ with MAD/FFmpeg, up to 50 ms with CoreAudio) and skips AAC priming samples; the 
 writer correct for both, which needs the audio files to be reachable. Tell it which MP3 decoder
 your Mixxx uses (MAD on Linux/Windows builds, CoreAudio on macOS).
 
+**Rekordbox's own database.** `master.db` is SQLCipher-encrypted; the optional `rekordbox` extra
+([pyrekordbox](https://github.com/dylanljones/pyrekordbox), included in the Docker image) opens
+it with the publicly known key. It is copied before reading, so Rekordbox can stay open. Beat
+grids are not in the database but in the analysis files under `share/PIONEER/USBANLZ`, which is
+why it wants the whole Rekordbox folder. Intelligent playlists are skipped.
+
 **Serato data lives in the audio files.** Serato's database only has metadata and paths. Cue
 points, loops and beat grids are `Serato Markers2`, `Serato Markers_` and `Serato BeatGrid` tags
 inside each MP3/AIFF/WAV (ID3 `GEOB`), FLAC and Ogg (Vorbis comments) and M4A (freeform atoms).
@@ -110,13 +121,13 @@ Existing Serato Flip data in a file is kept.
 ## Develop
 
 ```sh
-uv sync --all-extras
+uv sync --all-extras             # the web and rekordbox extras plus dev tools
 uv run pytest                    # generates test audio with ffmpeg; those tests skip without it
 uv run ruff check && uv run ruff format --check
 uv run python tests/fakelib.py /tmp/demo   # a demo Mixxx library + music to point the app at
 ```
 
-Layout: `model.py` (the shared model), `mixxx.py`, `rekordbox_xml.py`, `serato/` (`binfile`
+Layout: `model.py` (the shared model), `mixxx.py`, `rekordbox_xml.py`, `rekordbox_db.py`, `serato/` (`binfile`
 for `database V2`/crates, `markers` for the tag payloads, `tags` for audio-file I/O, `library`),
 `offsets.py` (decoder offsets), `grid.py`, `keys.py`, `colours.py`, `convert.py` (read → remap
 paths → write), `cli.py`, `web/`. Tests use real files from Serato, Rekordbox and Mixxx's test
@@ -139,3 +150,6 @@ Things not yet verified against the real programs:
 - Whether Serato and Rekordbox place cues identically on MP3s without a LAME header, and on AAC
   (both are assumed to match the reference timeline).
 - Serato beat grid markers are assumed to sit on downbeats; the first marker is moved to one.
+- Rekordbox `master.db`: hot cue slots are read from `djmdCue.Kind` as 1, 2, 3, 5, 6, 7, 8, 9 for
+  A–H, and cue colours from `ColorTableIndex`; both come from secondary sources and need checking
+  against a real library with coloured cues in every slot.
