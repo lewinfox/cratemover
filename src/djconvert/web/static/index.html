@@ -112,6 +112,11 @@
         </label>
         <label>Device name <input id="dst-device" placeholder="optional"></label>
       </div>
+      <label>Where rekordbox's computer sees the stick, for the <code>rekordbox.xml</code> put on it
+        <input id="dst-xml-root" placeholder="the mount point here — or E:/ on Windows, /Volumes/NAME on a Mac"></label>
+      <p class="hint">rekordbox on a laptop shows a stick only in Export mode and can't play from it; import the
+        stick's <code>rekordbox.xml</code> (Preferences › Advanced › rekordbox xml) to get its tracks, cues and grids.
+        Mixxx and CDJs/XDJs play straight from the stick.</p>
       <p class="hint">OneLibrary support is experimental: no third-party OneLibrary stick has a published hardware test.</p>
     </div>
     <div data-show-dst="serato">

@@ -202,6 +202,7 @@ class DriveConvertRequest(BaseModel):
     waveforms: bool = True
     onelibrary: str = "auto"
     mp3_decoder: str = "MAD"
+    xml_root: str = ""
 
 
 def _drive_path(path: str) -> Path:
@@ -225,6 +226,7 @@ def drive_convert(request: DriveConvertRequest) -> dict[str, str]:
         waveforms=request.waveforms,
         onelibrary=request.onelibrary,
         mp3_decoder=request.mp3_decoder,
+        xml_root=request.xml_root,
     )
 
     def work(job: Job, progress: Any) -> dict[str, Any]:
@@ -356,6 +358,8 @@ class WriteRequest(BaseModel):
     waveforms: bool = True
     device_name: str = ""
     onelibrary: str = "auto"
+    usb_xml: bool = True
+    usb_xml_root: str = ""
 
 
 class SyncRequest(BaseModel):
@@ -513,6 +517,8 @@ def _write_options(request: WriteRequest, output: Path) -> WriteOptions:
         waveforms=request.waveforms,
         device_name=request.device_name,
         onelibrary=request.onelibrary,
+        usb_xml=request.usb_xml,
+        usb_xml_root=request.usb_xml_root,
         in_place=request.in_place,
         playlists=request.playlists,
     )

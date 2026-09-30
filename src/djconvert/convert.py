@@ -87,6 +87,10 @@ class WriteOptions:
     waveforms: bool = True  # measure Rekordbox waveforms with ffmpeg
     device_name: str = ""
     onelibrary: str = "auto"  # "auto" | "on" | "off"
+    usb_xml: bool = True  # also put a rekordbox.xml for importing into rekordbox on the stick
+    usb_xml_root: str = (
+        ""  # how the rekordbox computer sees the stick (E:/, /Volumes/STICK); "" = here
+    )
     # Update the library at output_dir in place (with backups) instead of writing a new one
     in_place: bool = False
     # Selection: playlist paths ("Folder / Name"); empty means everything
@@ -197,6 +201,32 @@ def _place_on_drive(
     return copied
 
 
+def _stick_xml(root: Path, options: WriteOptions, progress: Progress) -> Path:
+    """``rekordbox.xml`` at the stick's root, describing the stick's own tracks.
+
+    rekordbox on a laptop can't play a stick's device library directly (it only
+    shows it in Export mode), and whether cues survive importing it is unclear.
+    Importing this XML (Preferences > Advanced > rekordbox xml) is the documented
+    way in, cues and grids included. XML needs absolute paths, so they are
+    written as the rekordbox computer sees the drive (``usb_xml_root``).
+    """
+    from .pioneer.usb import find_stick_root, read_rekordbox_usb
+
+    progress("Writing rekordbox.xml for importing into rekordbox")
+    stick_root = find_stick_root(root)
+    stick = read_rekordbox_usb(stick_root, progress)
+    seen_as = options.usb_xml_root.strip() or str(stick_root)
+    for track in stick.tracks.values():
+        track.location = apply_rules(track.location, [(str(stick_root), seen_as)])
+    target = stick_root / "rekordbox.xml"
+    write_rekordbox_xml(
+        stick,
+        target,
+        RekordboxWriteOptions(key_notation=options.key_notation or KeyNotation.CAMELOT),
+    )
+    return target
+
+
 def write_library(
     library: Library,
     options: WriteOptions,
@@ -261,6 +291,8 @@ def write_library(
             f"{usb.tracks} track(s) on the stick: {usb.copied} copied, {usb.transcoded} converted to MP3; "
             f"waveforms {usb.reused} reused, {usb.measured} measured, {usb.placeholders} placeholders.",
         )
+        if options.usb_xml:
+            files.append(_stick_xml(out, options, progress))
     elif options.format == "serato":
         serato_root = options.serato_root or "/"
         if options.in_place:

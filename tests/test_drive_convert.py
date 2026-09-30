@@ -52,7 +52,9 @@ def test_serato_stick_to_rekordbox_keeps_both(library_copy: Path, tmp_path: Path
     [backup] = list_backups(tmp_path / "backups")
     done = restore_drive(Path(backup["path"]), stick)
     assert {lib["format"] for lib in _libraries(stick)} == {"serato"}
-    assert "removed 1 file(s) the conversion had added" in done  # the MP3 made from the Ogg file
+    # The MP3 made from the Ogg file, and rekordbox.xml.
+    assert "removed 2 file(s) the conversion had added" in done
+    assert not (stick / "rekordbox.xml").exists()
     assert not list(stick.rglob("*Vorbis.mp3"))
 
 
@@ -76,6 +78,32 @@ def test_rekordbox_stick_to_serato_and_restore_tags(library_copy: Path, tmp_path
     assert {lib["format"] for lib in _libraries(stick)} == {"rekordbox_usb"}
     assert not read_tags(mp3).found  # the Serato tags written by the conversion are gone again
     assert _hot(read_library(ReadOptions("rekordbox_usb", str(stick))))["First Light"] == [
+        (0, 250),
+        (1, 4250),
+        (2, 2250),
+    ]
+
+
+@needs_ffmpeg
+def test_stick_gets_a_rekordbox_xml(library_copy: Path, tmp_path: Path) -> None:
+    stick = _make_stick(library_copy, tmp_path, "serato")
+    convert_drive(
+        stick,
+        DriveConvertOptions(
+            targets=["rekordbox_usb"],
+            backup_dir=str(tmp_path / "b"),
+            waveforms=False,
+            xml_root="E:/",
+        ),
+    )
+    xml = read_library(ReadOptions("rekordbox_xml", str(stick / "rekordbox.xml")))
+    locations = sorted(t.location for t in xml.tracks.values())
+    assert locations and all(loc.startswith("E:/") for loc in locations)
+    assert "E:/Contents/Alpha/Fixtures/Alpha - First Light.mp3" in locations or any(
+        loc.endswith("First Light.mp3") for loc in locations
+    )
+    first = next(t for t in xml.tracks.values() if t.title == "First Light")
+    assert [(c.slot, round(c.position_ms)) for c in first.hot_cues] == [
         (0, 250),
         (1, 4250),
         (2, 2250),

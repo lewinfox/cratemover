@@ -249,7 +249,9 @@ function convertPanel(d, i) {
     <label class="check"><input type="checkbox" data-opt="keep" checked> Keep the ${escapeHtml(source)} library too (the drive then works in both)</label>
     <label class="check"><input type="checkbox" data-opt="full"> Back up the whole drive (${gb(used)}), not just the library folders</label>
     ${panel.target === "serato" ? '<label class="check"><input type="checkbox" data-opt="tags" checked> Write cues and grids into the audio files (their previous Serato tags are backed up)</label>' : ""}
-    ${panel.target === "rekordbox_usb" ? `<label>OneLibrary (rekordbox 7, newest players)
+    ${panel.target === "rekordbox_usb" ? `<label>Where rekordbox's computer sees this drive (for <code>rekordbox.xml</code>)
+      <input data-opt="xmlroot" placeholder="${escapeHtml(d.path)} — or E:/ on Windows, /Volumes/${escapeHtml(d.label)} on a Mac"></label>
+      <label>OneLibrary (rekordbox 7, newest players)
       <select data-opt="onelibrary"><option value="auto">If the drive already has one</option><option value="on">Yes</option><option value="off">No</option></select></label>` : ""}
     <div class="actions"><button type="button" data-act="run" data-i="${i}" ${panel.status ? "disabled" : ""}>Back up and convert</button>
       <button type="button" class="secondary" data-act="close" data-i="${i}">Cancel</button></div>
@@ -349,6 +351,7 @@ async function runDriveConvert(drive, panelEl) {
     full_backup: opt("full").checked,
     serato_write_tags: opt("tags") ? opt("tags").checked : true,
     onelibrary: opt("onelibrary") ? opt("onelibrary").value : "auto",
+    xml_root: opt("xmlroot") ? opt("xmlroot").value.trim() : "",
   };
   panel.status = "Starting…";
   panel.error = null;
@@ -547,6 +550,7 @@ function writeOptions(format) {
     waveforms: $("dst-waveforms").checked,
     device_name: $("dst-device").value.trim(),
     onelibrary: $("dst-onelibrary").value,
+    usb_xml_root: $("dst-xml-root").value.trim(),
   };
 }
 

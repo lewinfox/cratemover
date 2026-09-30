@@ -52,6 +52,7 @@ class DriveConvertOptions:
     waveforms: bool = True
     onelibrary: str = "auto"
     mp3_decoder: str = "MAD"
+    xml_root: str = ""  # how the rekordbox computer sees this drive, for rekordbox.xml
 
 
 @dataclass
@@ -318,6 +319,7 @@ def convert_drive(
             waveforms=options.waveforms,
             onelibrary=options.onelibrary,
             mp3_decoder=options.mp3_decoder,  # type: ignore[arg-type]
+            usb_xml_root=options.xml_root,
         )
         written = write_library(library, write, read.access_rules, progress)
         result.written[target] = written.as_dict()
@@ -339,4 +341,6 @@ def convert_drive(
             if (root / name).is_dir():
                 shutil.rmtree(root / name)
                 result.removed.append(name)
+        if source_format == "rekordbox_usb" and (root / "rekordbox.xml").is_file():
+            (root / "rekordbox.xml").unlink()
     return result
