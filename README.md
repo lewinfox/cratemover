@@ -79,17 +79,18 @@ plugging a stick in). On macOS, Docker Desktop shares `/Volumes` as a folder rat
 mounts; sticks that already hold a Rekordbox or Serato library are still found there, but a blank
 stick only shows up in the file browser.
 
-**Convert a stick in one go.** Plug the stick in, and under *Convert drive* press *Convert to
-Rekordbox* or *Convert to Serato* (CLI: none yet; the web UI and `/api/drives/convert`). It:
+**Convert a stick in one go.** Plug the stick in, press *Convert drive to Rekordbox* or *Convert
+drive to Serato* next to it in the *USB drives* panel, then *Back up and convert* (or POST to
+`/api/drives/convert`). It:
 
 1. backs up the stick's library folders (`PIONEER`, `_Serato_`) and, for every audio file whose
    Serato tags will change, the original tag values, to `BACKUP_DIR` (default `exports/backups`);
-   tick *Full backup* to copy the whole stick instead. It checks there's room first;
+   tick *Back up the whole drive* to copy the whole stick instead. It checks there's room first;
 2. reads the library on the stick and writes the other format onto the same stick, pointing at
    the audio already there (nothing is copied unless a format has to be transcoded, e.g. Ogg to MP3
    for Rekordbox), with cues and grids moved for each program's MP3 timing;
-3. keeps the original library by default, so the stick works in both programs; untick *Keep the
-   original* to remove it.
+3. keeps the original library by default, so the stick works in both programs;
+   untick *Keep the … library too* to remove it.
 
 *Restore* on a backup puts the stick back as it was: library folders, Serato tags, and files the
 conversion added removed. Nothing reformats or re-images the drive: each program only reads its
@@ -109,7 +110,7 @@ stick, so what matters is what the laptop software does with it:
   Performance mode: you import its playlists into your collection. Every Rekordbox stick this tool
   writes also gets a `rekordbox.xml` at its root for that; in rekordbox, add it under *Preferences
   → Advanced → rekordbox xml* and import the playlists from the *rekordbox xml* tree, which brings
-  cues and grids with them. Set *rekordbox.xml paths* (e.g. `E:/` on Windows, `/Volumes/STICK` on a
+  cues and grids with them. Set *Where rekordbox's computer sees this drive* (e.g. `E:/` on Windows, `/Volumes/STICK` on a
   Mac) to how the laptop sees the stick, since the container sees it somewhere else. rekordbox 7
   deletes the play history from a stick after importing it unless you turn that off in its
   preferences.
