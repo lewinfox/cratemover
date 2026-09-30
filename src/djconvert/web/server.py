@@ -6,6 +6,7 @@ Environment:
 * ``BROWSE_ROOTS`` (default ``/sources:<EXPORT_DIR>:/media:/mnt:/Volumes:$HOME``): folders
   the file picker may show and libraries may be written in, separated by ``:``.
 * ``UPLOAD_DIR`` (default a temp dir): where uploaded libraries are unpacked.
+* ``BACKUP_DIR`` (default ``<EXPORT_DIR>/backups``): where drive conversions back drives up.
 * ``USB_ROOTS`` (default ``/media:/run/media:/mnt:/Volumes``): where removable drives
   are mounted; drives below them are listed live by ``/api/drives``.
 """
@@ -43,6 +44,7 @@ from ..convert import (
     write_library,
 )
 from ..devices import list_drives, usb_roots
+from ..drive_convert import DriveConvertOptions, convert_drive, list_backups, restore_drive
 from ..keys import KeyNotation, format_key
 from ..model import Library, Playlist, Track
 from ..paths import make_resolver, parse_rules
@@ -61,6 +63,8 @@ BROWSE_ROOTS = [
     ),
 ]
 BROWSE_ROOTS = list(dict.fromkeys(BROWSE_ROOTS))
+
+BACKUP_DIR = Path(os.environ.get("BACKUP_DIR") or EXPORT_DIR / "backups").resolve()
 
 app = FastAPI(title="DJ Library Converter", version=__version__)
 
@@ -186,6 +190,70 @@ def _suggest_sources() -> list[dict[str, str]]:
 def drives() -> dict[str, Any]:
     """Removable drives mounted now, and the libraries on them. The UI polls this."""
     return {"drives": [d.as_dict() for d in list_drives()], "roots": [str(r) for r in usb_roots()]}
+
+
+class DriveConvertRequest(BaseModel):
+    path: str
+    targets: list[str]
+    source_format: str = ""
+    full_backup: bool = False
+    keep_source: bool = True
+    serato_write_tags: bool = True
+    waveforms: bool = True
+    onelibrary: str = "auto"
+    mp3_decoder: str = "MAD"
+
+
+def _drive_path(path: str) -> Path:
+    drive = Path(path)
+    if not drive.is_dir() or not any(r.resolve() in drive.resolve().parents for r in usb_roots()):
+        raise HTTPException(403, "not a drive under the USB folder")
+    return drive
+
+
+@app.post("/api/drives/convert")
+def drive_convert(request: DriveConvertRequest) -> dict[str, str]:
+    """Back a drive up and convert its library to the target format(s), in place."""
+    drive = _drive_path(request.path)
+    options = DriveConvertOptions(
+        targets=request.targets,
+        source_format=request.source_format,
+        backup_dir=str(BACKUP_DIR),
+        full_backup=request.full_backup,
+        keep_source=request.keep_source,
+        serato_write_tags=request.serato_write_tags,
+        waveforms=request.waveforms,
+        onelibrary=request.onelibrary,
+        mp3_decoder=request.mp3_decoder,
+    )
+
+    def work(job: Job, progress: Any) -> dict[str, Any]:
+        return convert_drive(drive, options, progress).as_dict()
+
+    return {"job_id": _start("drive-convert", work).id}
+
+
+@app.get("/api/backups")
+def backups() -> dict[str, Any]:
+    return {"backups": list_backups(BACKUP_DIR), "dir": str(BACKUP_DIR)}
+
+
+class RestoreRequest(BaseModel):
+    backup: str
+    path: str
+
+
+@app.post("/api/backups/restore")
+def restore(request: RestoreRequest) -> dict[str, str]:
+    drive = _drive_path(request.path)
+    backup = Path(request.backup).resolve()
+    if BACKUP_DIR not in backup.parents or not (backup / "manifest.json").is_file():
+        raise HTTPException(404, "no such backup")
+
+    def work(job: Job, progress: Any) -> dict[str, Any]:
+        return {"done": restore_drive(backup, drive, progress)}
+
+    return {"job_id": _start("restore", work).id}
 
 
 def _is_rekordbox_xml(path: Path) -> bool:

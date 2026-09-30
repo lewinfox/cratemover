@@ -195,6 +195,7 @@ function gb(bytes) {
 }
 
 async function watchDrives() {
+  await refreshBackups();
   let known = null;
   let signature = "";
   const tick = async () => {
@@ -221,46 +222,147 @@ async function watchDrives() {
   tick();
 }
 
+const drivePanels = {};  // drive path -> { target, status, error, result }
+let lastDrives = { drives: [], roots: [] };
+let backupsCache = [];
+
+async function refreshBackups() {
+  try { backupsCache = (await api("/api/backups")).backups; } catch (_) { backupsCache = []; }
+}
+
+function convertPanel(d, i) {
+  const panel = drivePanels[d.path];
+  if (!panel) return "";
+  const name = FORMAT_SHORT[panel.target];
+  const source = d.libraries.map((l) => FORMAT_SHORT[l.format]).join(" + ");
+  const used = d.total_bytes - d.free_bytes;
+  if (panel.result) {
+    const r = panel.result;
+    return `<div class="panel"><b>Converted to ${escapeHtml(name)}.</b> Backup: <code>${escapeHtml(r.backup)}</code>
+      ${r.removed.length ? `<br>Removed the old ${escapeHtml(r.removed.join(", "))} library.` : ""}
+      <ul class="warnings">${r.warnings.map((w) => `<li>${escapeHtml(w)}</li>`).join("")}</ul>
+      <button type="button" class="chip" data-act="close" data-i="${i}">Close</button></div>`;
+  }
+  return `<div class="panel">
+    <b>Convert ${escapeHtml(d.label)} (${escapeHtml(source)}) to ${escapeHtml(name)}</b>
+    <p class="hint">The ${escapeHtml(name)} library is written onto this drive, using the audio already on it. A backup comes first.</p>
+    <label class="check"><input type="checkbox" data-opt="keep" checked> Keep the ${escapeHtml(source)} library too (the drive then works in both)</label>
+    <label class="check"><input type="checkbox" data-opt="full"> Back up the whole drive (${gb(used)}), not just the library folders</label>
+    ${panel.target === "serato" ? '<label class="check"><input type="checkbox" data-opt="tags" checked> Write cues and grids into the audio files (their previous Serato tags are backed up)</label>' : ""}
+    ${panel.target === "rekordbox_usb" ? `<label>OneLibrary (rekordbox 7, newest players)
+      <select data-opt="onelibrary"><option value="auto">If the drive already has one</option><option value="on">Yes</option><option value="off">No</option></select></label>` : ""}
+    <div class="actions"><button type="button" data-act="run" data-i="${i}" ${panel.status ? "disabled" : ""}>Back up and convert</button>
+      <button type="button" class="secondary" data-act="close" data-i="${i}">Cancel</button></div>
+    <div class="status${panel.error ? " error" : ""}">${escapeHtml(panel.error || panel.status || "")}</div>
+  </div>`;
+}
+
+function backupsFor(d, i) {
+  const mine = backupsCache.filter((b) => b.drive === d.path || b.label === d.label);
+  if (!mine.length) return "";
+  return `<details><summary>${mine.length} backup(s)</summary><ul class="backups">${mine.map((b, k) =>
+    `<li>${escapeHtml(b.created)} · ${b.full ? "whole drive" : "library folders"} · ${gb(b.size_bytes)}
+      <button type="button" class="chip" data-act="restore" data-i="${i}" data-k="${k}">Restore</button></li>`).join("")}</ul></details>`;
+}
+
 function renderDrives(drives, roots, fresh) {
+  lastDrives = { drives, roots };
   if (!drives.length) {
     $("drives").innerHTML = `<p class="hint">No USB drives mounted under ${escapeHtml(roots.join(", "))}. Plug one in; it appears here within a few seconds.</p>`;
     return;
   }
   $("drives").innerHTML = drives.map((d, i) => {
+    const formats = d.libraries.map((l) => l.format);
     const libs = d.libraries.map((l, j) => `<span class="pill">${escapeHtml(FORMAT_SHORT[l.format] || l.format)}</span>
       <button type="button" class="chip" data-act="open" data-i="${i}" data-j="${j}">Open</button>
       <button type="button" class="chip" data-act="a" data-i="${i}" data-j="${j}">Sync A</button>
       <button type="button" class="chip" data-act="b" data-i="${i}" data-j="${j}">Sync B</button>`).join(" ");
+    const convert = formats.length ? Object.keys(FORMAT_SHORT).map((t) =>
+      `<button type="button" data-act="convert" data-target="${t}" data-i="${i}" ${formats.length === 1 && formats[0] === t ? "disabled" : ""}>
+        Convert drive to ${FORMAT_SHORT[t]}</button>`).join(" ") : "";
     return `<div class="drive${fresh.includes(d.path) ? " fresh" : ""}">
       <div><b>${escapeHtml(d.label)}</b> <span class="muted">${escapeHtml(d.path)} · ${escapeHtml(d.fstype || "?")} · ${gb(d.free_bytes)} free of ${gb(d.total_bytes)}</span></div>
-      <div class="chips">${libs || '<span class="muted">No DJ library yet.</span>'}
-        <button type="button" class="chip" data-act="rekordbox" data-i="${i}">Write Rekordbox here</button>
-        <button type="button" class="chip" data-act="serato" data-i="${i}">Write Serato here</button></div>
+      <div class="chips">${libs || '<span class="muted">No DJ library yet.</span>'}</div>
+      ${convert ? `<div class="actions">${convert}</div>` : ""}
+      ${convertPanel(d, i)}
+      <div class="chips"><span class="muted">Export a loaded library here:</span>
+        <button type="button" class="chip" data-act="rekordbox" data-i="${i}">Rekordbox</button>
+        <button type="button" class="chip" data-act="serato" data-i="${i}">Serato</button></div>
       ${d.notes.map((n) => `<div class="note">${escapeHtml(n)}</div>`).join("")}
+      ${backupsFor(d, i)}
     </div>`;
   }).join("");
-  $("drives").onclick = (e) => {
-    const btn = e.target.closest("[data-act]");
-    if (!btn) return;
-    const drive = drives[Number(btn.dataset.i)];
-    const lib = btn.dataset.j !== undefined ? drive.libraries[Number(btn.dataset.j)] : null;
-    const act = btn.dataset.act;
-    if (act === "open") { switchTab("convert"); state.pickers.src.set(lib); $("load-btn").focus(); }
-    else if (act === "a" || act === "b") { switchTab("sync"); state.pickers[act].set(lib); }
-    else {
-      switchTab("convert");
-      $("dst-format").value = act === "rekordbox" ? "rekordbox_usb" : "serato";
-      if (act === "serato") {
-        document.querySelector("input[name=dst-mode][value=in_place]").checked = true;
-        $("dst-serato-root").value = drive.path;
-      }
-      $("dst-path").value = drive.path;
-      updateTarget();
-      $("target-card").classList.contains("hidden")
-        ? setStatus($("load-status"), `Target set to ${drive.label}. Load a source library first.`)
-        : $("target-card").scrollIntoView({ behavior: "smooth" });
+  $("drives").onclick = onDriveClick;
+}
+
+function rerenderDrives() {
+  renderDrives(lastDrives.drives, lastDrives.roots, []);
+}
+
+async function onDriveClick(e) {
+  const btn = e.target.closest("[data-act]");
+  if (!btn) return;
+  const drives = lastDrives.drives;
+  const drive = drives[Number(btn.dataset.i)];
+  const lib = btn.dataset.j !== undefined ? drive.libraries[Number(btn.dataset.j)] : null;
+  const act = btn.dataset.act;
+  if (act === "open") { switchTab("convert"); state.pickers.src.set(lib); $("load-btn").focus(); }
+  else if (act === "a" || act === "b") { switchTab("sync"); state.pickers[act].set(lib); }
+  else if (act === "convert") { drivePanels[drive.path] = { target: btn.dataset.target }; rerenderDrives(); }
+  else if (act === "close") { delete drivePanels[drive.path]; rerenderDrives(); }
+  else if (act === "run") { runDriveConvert(drive, btn.closest(".panel")); }
+  else if (act === "restore") {
+    const mine = backupsCache.filter((b) => b.drive === drive.path || b.label === drive.label);
+    const backup = mine[Number(btn.dataset.k)];
+    if (!confirm(`Restore ${drive.label} to how it was at ${backup.created}? Library changes since then are undone.`)) return;
+    btn.disabled = true;
+    try {
+      const { job_id } = await post("/api/backups/restore", { backup: backup.path, path: drive.path });
+      const result = await waitForJob(job_id, $("drives-status"));
+      $("drives-status").textContent = `Restored ${drive.label}: ${result.done.join(", ")}.`;
+    } catch (err) {
+      $("drives-status").textContent = `Restore failed: ${err.message}`;
     }
+  } else {
+    switchTab("convert");
+    $("dst-format").value = act === "rekordbox" ? "rekordbox_usb" : "serato";
+    if (act === "serato") {
+      document.querySelector("input[name=dst-mode][value=in_place]").checked = true;
+      $("dst-serato-root").value = drive.path;
+    }
+    $("dst-path").value = drive.path;
+    updateTarget();
+    $("target-card").classList.contains("hidden")
+      ? setStatus($("load-status"), `Target set to ${drive.label}. Load a source library first.`)
+      : $("target-card").scrollIntoView({ behavior: "smooth" });
+  }
+}
+
+async function runDriveConvert(drive, panelEl) {
+  const panel = drivePanels[drive.path];
+  const opt = (name) => panelEl.querySelector(`[data-opt="${name}"]`);
+  const body = {
+    path: drive.path,
+    targets: [panel.target],
+    source_format: drive.libraries.map((l) => l.format).find((f) => f !== panel.target) || "",
+    keep_source: opt("keep").checked,
+    full_backup: opt("full").checked,
+    serato_write_tags: opt("tags") ? opt("tags").checked : true,
+    onelibrary: opt("onelibrary") ? opt("onelibrary").value : "auto",
   };
+  panel.status = "Starting…";
+  panel.error = null;
+  rerenderDrives();
+  const statusEl = { set textContent(t) { panel.status = t; const el = document.querySelector(".panel .status"); if (el) el.textContent = t; } };
+  try {
+    const { job_id } = await post("/api/drives/convert", body);
+    panel.result = await waitForJob(job_id, statusEl);
+  } catch (err) {
+    panel.error = err.message;
+    panel.status = null;
+  }
+  await refreshBackups();
+  rerenderDrives();
 }
 
 function switchTab(name) {
