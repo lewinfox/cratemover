@@ -1,0 +1,14 @@
+# Test fixtures
+
+Real files written by the DJ programs, used to check the parsers against more than our own output.
+
+| Path | What | Source (licence) |
+|------|------|------------------|
+| `serato-db/database_v2_test.bin`, `database_v2_duplicates.bin` | Serato `database V2` files | [bvandercar-vt/serato-tools](https://github.com/bvandercar-vt/serato-tools) `test/data` @ `e24000e` (MIT) |
+| `serato-db/TestCrate.crate`, `TestSmartCrate.scrate` | A Serato crate and smart crate | same |
+| `serato-tags/{mp3,mp4,flac,ogg}/…` | Serato `Markers2`, `Markers_` and `BeatGrid` tag payloads, one feature each | [mixxxdj/mixxx](https://github.com/mixxxdj/mixxx) `src/test/serato/data` @ `5fefde0` (GPL-2.0-or-later), originally from [Holzhaus/serato-tags](https://github.com/Holzhaus/serato-tags) (MIT) |
+| `serato-tags/real-*.bin` | The three Serato GEOB frames of a real analysed track with 6 hot cues and a 2-marker grid | extracted from serato-tools `test/data/test_mp3.mp3` (MIT) |
+| `rekordbox/rekordbox5-database.xml`, `rekordbox6-database.xml` | Rekordbox XML exports | [dylanljones/pyrekordbox](https://github.com/dylanljones/pyrekordbox) `.testdata` @ `0416d1d` (MIT) |
+| `mixxx_schema.xml` | *(in the package)* Mixxx's `res/schema.xml` | Mixxx (GPL-2.0-or-later) |
+
+Audio for the round-trip tests is generated at test time with ffmpeg (`tests/fakelib.py`).

@@ -1,0 +1,50 @@
+[project]
+name = "dj-library-converter"
+version = "0.1.0"
+description = "Convert DJ libraries (playlists, crates, cues, loops, beat grids) between Mixxx, Rekordbox and Serato."
+readme = "README.md"
+requires-python = ">=3.11"
+license = "GPL-3.0-only"
+license-files = ["LICENSE"]
+dependencies = [
+  "mutagen>=1.47",
+]
+
+[project.optional-dependencies]
+web = [
+  "fastapi>=0.115",
+  "uvicorn>=0.30",
+  "python-multipart>=0.0.9",
+]
+
+[project.scripts]
+djconvert = "djconvert.cli:main"
+
+[dependency-groups]
+dev = [
+  "httpx>=0.27",
+  "pytest>=8.3",
+  "ruff>=0.6",
+]
+
+[build-system]
+requires = ["uv_build>=0.8.17,<0.10"]
+build-backend = "uv_build"
+
+[tool.uv]
+default-groups = ["dev"]
+
+[tool.uv.build-backend]
+module-name = "djconvert"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "SIM", "RUF"]
+ignore = ["E501"]  # the formatter handles line length
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = ["-ra"]
