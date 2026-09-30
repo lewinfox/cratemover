@@ -128,3 +128,8 @@ dialog::backdrop { background: rgb(0 0 0 / 0.4); }
 .side h3 { margin: 0 0 4px; }
 .side .row > label { min-width: 0; }
 .side .row { flex-direction: column; align-items: stretch; }
+.drives h2 { margin: 0; }
+.drive { border: 1px solid var(--border); border-radius: 8px; padding: 8px 12px; margin-top: 8px; }
+.drive.fresh { border-color: var(--accent); box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 25%, transparent); }
+.drive .note { color: var(--warn-text); background: var(--warn-bg); border-radius: 4px; padding: 2px 8px; margin-top: 6px; font-size: 0.85rem; }
+.pill { display: inline-block; background: var(--accent); color: var(--accent-text); border-radius: 999px; padding: 1px 8px; font-size: 0.8rem; }

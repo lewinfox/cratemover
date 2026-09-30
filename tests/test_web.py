@@ -106,3 +106,8 @@ def test_sync_endpoint_preview_and_run(
     assert done["a_to_b"]["written"]["summary"]["tracks"] >= 5
     outside = body | {"b": {"format": "rekordbox_usb", "path": "/etc"}}
     assert client.post("/api/sync", json=outside).status_code == 403
+
+
+def test_drives_endpoint(client: TestClient) -> None:
+    body = client.get("/api/drives").json()
+    assert "drives" in body and body["roots"]

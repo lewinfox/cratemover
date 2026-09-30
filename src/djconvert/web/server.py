@@ -6,6 +6,8 @@ Environment:
 * ``BROWSE_ROOTS`` (default ``/sources:<EXPORT_DIR>:/media:/mnt:/Volumes:$HOME``): folders
   the file picker may show and libraries may be written in, separated by ``:``.
 * ``UPLOAD_DIR`` (default a temp dir): where uploaded libraries are unpacked.
+* ``USB_ROOTS`` (default ``/media:/run/media:/mnt:/Volumes``): where removable drives
+  are mounted; drives below them are listed live by ``/api/drives``.
 """
 
 from __future__ import annotations
@@ -40,6 +42,7 @@ from ..convert import (
     sync_libraries,
     write_library,
 )
+from ..devices import list_drives, usb_roots
 from ..keys import KeyNotation, format_key
 from ..model import Library, Playlist, Track
 from ..paths import make_resolver, parse_rules
@@ -48,12 +51,16 @@ from ..sync import CuePolicy, PlaylistPolicy, Prefer, SyncOptions
 EXPORT_DIR = Path(os.environ.get("EXPORT_DIR", "export")).resolve()
 UPLOAD_DIR = Path(os.environ.get("UPLOAD_DIR") or tempfile.mkdtemp(prefix="djconvert-uploads-"))
 BROWSE_ROOTS = [
-    Path(p)
-    for p in os.environ.get(
-        "BROWSE_ROOTS", f"/sources:{EXPORT_DIR}:/media:/mnt:/Volumes:/run/media:{Path.home()}"
-    ).split(":")
-    if p
+    *usb_roots(),
+    *(
+        Path(p)
+        for p in os.environ.get(
+            "BROWSE_ROOTS", f"/sources:{EXPORT_DIR}:/media:/mnt:/Volumes:/run/media:{Path.home()}"
+        ).split(":")
+        if p
+    ),
 ]
+BROWSE_ROOTS = list(dict.fromkeys(BROWSE_ROOTS))
 
 app = FastAPI(title="DJ Library Converter", version=__version__)
 
@@ -173,6 +180,12 @@ def _suggest_sources() -> list[dict[str, str]]:
             except OSError:
                 continue
     return found
+
+
+@app.get("/api/drives")
+def drives() -> dict[str, Any]:
+    """Removable drives mounted now, and the libraries on them. The UI polls this."""
+    return {"drives": [d.as_dict() for d in list_drives()], "roots": [str(r) for r in usb_roots()]}
 
 
 def _is_rekordbox_xml(path: Path) -> bool:

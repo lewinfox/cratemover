@@ -137,11 +137,7 @@ async function init() {
     next = next === "a" ? "b" : "a";
   });
 
-  document.querySelectorAll("[data-tab]").forEach((tab) => tab.addEventListener("click", () => {
-    document.querySelectorAll("[data-tab]").forEach((t) => t.setAttribute("aria-selected", String(t === tab)));
-    $("tab-convert").classList.toggle("hidden", tab.dataset.tab !== "convert");
-    $("tab-sync").classList.toggle("hidden", tab.dataset.tab !== "sync");
-  }));
+  document.querySelectorAll("[data-tab]").forEach((tab) => tab.addEventListener("click", () => switchTab(tab.dataset.tab)));
 
   $("dst-format").addEventListener("change", updateTarget);
   document.querySelectorAll("input[name=dst-mode]").forEach((r) => r.addEventListener("change", updateTarget));
@@ -150,6 +146,7 @@ async function init() {
   });
   updateTarget();
 
+  watchDrives();
   $("load-btn").addEventListener("click", loadLibrary);
   $("convert-btn").addEventListener("click", convert);
   $("upload").addEventListener("change", uploadFile);
@@ -187,6 +184,89 @@ function updateTarget() {
   $("dst-path-caption").textContent = format === "rekordbox_usb" ? "USB stick (mount point) or folder"
     : { mixxx: "mixxxdb.sqlite to update", serato: "_Serato_ folder to update (or the drive holding it)",
         rekordbox_xml: "rekordbox.xml to overwrite" }[format];
+}
+
+// --- USB drives (hot-plug) -------------------------------------------------------------
+
+const FORMAT_SHORT = { rekordbox_usb: "Rekordbox", serato: "Serato" };
+
+function gb(bytes) {
+  return bytes >= 1e9 ? `${(bytes / 1e9).toFixed(1)} GB` : `${Math.round(bytes / 1e6)} MB`;
+}
+
+async function watchDrives() {
+  let known = null;
+  let signature = "";
+  const tick = async () => {
+    try {
+      const { drives, roots } = await api("/api/drives");
+      const paths = drives.map((d) => d.path);
+      if (known !== null) {
+        const added = drives.filter((d) => !known.includes(d.path));
+        const removed = known.filter((p) => !paths.includes(p));
+        if (added.length) $("drives-status").textContent = `Connected: ${added.map((d) => d.label).join(", ")}`;
+        else if (removed.length) $("drives-status").textContent = `Removed: ${removed.map((p) => p.split("/").pop()).join(", ")}`;
+      }
+      const now = drives.map((d) => `${d.path}:${d.libraries.map((l) => l.format).join(",")}:${d.writable}`).join("\n");
+      if (now !== signature || !$("drives").childElementCount) {
+        renderDrives(drives, roots, known === null ? [] : paths.filter((p) => !known.includes(p)));
+        signature = now;
+      }
+      known = paths;
+    } catch (_) {
+      $("drives-status").textContent = "Can't list drives right now.";
+    }
+    setTimeout(tick, 3000);
+  };
+  tick();
+}
+
+function renderDrives(drives, roots, fresh) {
+  if (!drives.length) {
+    $("drives").innerHTML = `<p class="hint">No USB drives mounted under ${escapeHtml(roots.join(", "))}. Plug one in; it appears here within a few seconds.</p>`;
+    return;
+  }
+  $("drives").innerHTML = drives.map((d, i) => {
+    const libs = d.libraries.map((l, j) => `<span class="pill">${escapeHtml(FORMAT_SHORT[l.format] || l.format)}</span>
+      <button type="button" class="chip" data-act="open" data-i="${i}" data-j="${j}">Open</button>
+      <button type="button" class="chip" data-act="a" data-i="${i}" data-j="${j}">Sync A</button>
+      <button type="button" class="chip" data-act="b" data-i="${i}" data-j="${j}">Sync B</button>`).join(" ");
+    return `<div class="drive${fresh.includes(d.path) ? " fresh" : ""}">
+      <div><b>${escapeHtml(d.label)}</b> <span class="muted">${escapeHtml(d.path)} · ${escapeHtml(d.fstype || "?")} · ${gb(d.free_bytes)} free of ${gb(d.total_bytes)}</span></div>
+      <div class="chips">${libs || '<span class="muted">No DJ library yet.</span>'}
+        <button type="button" class="chip" data-act="rekordbox" data-i="${i}">Write Rekordbox here</button>
+        <button type="button" class="chip" data-act="serato" data-i="${i}">Write Serato here</button></div>
+      ${d.notes.map((n) => `<div class="note">${escapeHtml(n)}</div>`).join("")}
+    </div>`;
+  }).join("");
+  $("drives").onclick = (e) => {
+    const btn = e.target.closest("[data-act]");
+    if (!btn) return;
+    const drive = drives[Number(btn.dataset.i)];
+    const lib = btn.dataset.j !== undefined ? drive.libraries[Number(btn.dataset.j)] : null;
+    const act = btn.dataset.act;
+    if (act === "open") { switchTab("convert"); state.pickers.src.set(lib); $("load-btn").focus(); }
+    else if (act === "a" || act === "b") { switchTab("sync"); state.pickers[act].set(lib); }
+    else {
+      switchTab("convert");
+      $("dst-format").value = act === "rekordbox" ? "rekordbox_usb" : "serato";
+      if (act === "serato") {
+        document.querySelector("input[name=dst-mode][value=in_place]").checked = true;
+        $("dst-serato-root").value = drive.path;
+      }
+      $("dst-path").value = drive.path;
+      updateTarget();
+      $("target-card").classList.contains("hidden")
+        ? setStatus($("load-status"), `Target set to ${drive.label}. Load a source library first.`)
+        : $("target-card").scrollIntoView({ behavior: "smooth" });
+    }
+  };
+}
+
+function switchTab(name) {
+  document.querySelectorAll("[data-tab]").forEach((t) => t.setAttribute("aria-selected", String(t.dataset.tab === name)));
+  $("tab-convert").classList.toggle("hidden", name !== "convert");
+  $("tab-sync").classList.toggle("hidden", name !== "sync");
 }
 
 // --- file browser -----------------------------------------------------------------------

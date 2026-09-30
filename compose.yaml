@@ -17,6 +17,7 @@ services:
     user: "${UID:-1000}:${GID:-1000}"
     environment:
       BROWSE_ROOTS: "/sources:/export:${MUSIC_DIR:-${HOME}/Music}:${USB_DIR:-/media}"
+      USB_ROOTS: "${USB_DIR:-/media}"
     volumes:
       # Drop a rekordbox.xml, a mixxxdb.sqlite or a _Serato_ folder in ./sources.
       - "./sources:/sources/files:ro"
@@ -25,8 +26,11 @@ services:
       - "${REKORDBOX_DIR:-./sources/rekordbox}:/sources/rekordbox:ro"
       - "${MUSIC_DIR:-${HOME}/Music}:${MUSIC_DIR:-${HOME}/Music}:${MUSIC_ACCESS:-ro}"
       # Where removable drives appear: /media (most Linux desktops), /run/media, /Volumes (macOS).
-      # Sticks plugged in after startup need a restart, or USB_MOUNT_MODE=rw,rslave on Linux
-      # hosts whose / is a shared mount (systemd's default).
-      - "${USB_DIR:-/media}:${USB_DIR:-/media}:${USB_MOUNT_MODE:-rw}"
+      # rslave passes mounts made after startup into the container, so hot-plugged sticks show
+      # up (and unplugged ones go). It needs the host's / to be a shared mount, which systemd
+      # makes it. If the container refuses to start with "not a shared or slave mount", either
+      # run `sudo mount --make-rshared /` or set USB_MOUNT_MODE=rw (then restart it after
+      # plugging a stick in).
+      - "${USB_DIR:-/media}:${USB_DIR:-/media}:${USB_MOUNT_MODE:-rw,rslave}"
       - "${EXPORT_DIR:-./export}:/export"
     restart: unless-stopped

@@ -30,7 +30,7 @@ docker compose up --build        # then open http://localhost:8000
 | Variable        | Default               | Mounted at              | What                                                         |
 |-----------------|-----------------------|-------------------------|--------------------------------------------------------------|
 | `USB_DIR`       | `/media`              | **same path**, writable | Where USB sticks appear (`/run/media`, `/Volumes` on a Mac)  |
-| `USB_MOUNT_MODE`| `rw`                  |                         | `rw,rslave` (Linux) shows sticks plugged in after startup     |
+| `USB_MOUNT_MODE`| `rw,rslave`           |                         | `rslave` passes sticks plugged in later into the container    |
 | `MIXXX_DIR`     | `~/.mixxx`            | `/sources/mixxx`, writable | Mixxx's folder with `mixxxdb.sqlite`                     |
 | `REKORDBOX_DIR` | `./sources/rekordbox` | `/sources/rekordbox` (ro) | Rekordbox 6/7's folder (`~/Library/Pioneer/rekordbox`, `%APPDATA%\Pioneer\rekordbox`) |
 | `MUSIC_DIR`     | `~/Music`             | **same path** (ro)      | Your music (a Mac's `~/Music/_Serato_` comes with it)        |
@@ -63,6 +63,21 @@ uv run djconvert convert --help                               # every option
 ```
 
 ## USB sticks
+
+**Hot-plugging.** The *USB drives* panel at the top of the web UI lists every drive mounted under
+`USB_DIR`, what's on it (Rekordbox, Serato, nothing yet), its filesystem and free space, and
+updates within 3 s of a stick being plugged in or pulled out, with buttons to open it, sync it or
+write a library onto it. It warns about exFAT/NTFS sticks (players up to the CDJ-2000NXS2 only
+read FAT32) and read-only mounts.
+
+This needs the host's mounts to reach the container: compose bind-mounts `USB_DIR` with `rslave`
+propagation, so a stick your desktop auto-mounts after the container started appears inside it
+(and disappears when ejected). That requires the host's `/` to be a *shared* mount, which systemd
+distributions set up by default. If `docker compose up` fails with "not a shared or slave mount",
+run `sudo mount --make-rshared /` (or set `USB_MOUNT_MODE=rw` and restart the container after
+plugging a stick in). On macOS, Docker Desktop shares `/Volumes` as a folder rather than as
+mounts; sticks that already hold a Rekordbox or Serato library are still found there, but a blank
+stick only shows up in the file browser.
 
 **Rekordbox (CDJ/XDJ).** Writing a stick builds `PIONEER/rekordbox/export.pdb` and, per track, the
 `.DAT`/`.EXT`/`.2EX` analysis files (beat grid, hot and memory cues with names and colours,
@@ -162,7 +177,7 @@ uv run python tests/fakelib.py /tmp/demo   # a demo Mixxx library + music to poi
 
 Layout (`src/djconvert/`): `model.py` (the shared model), `mixxx.py`, `rekordbox_xml.py`,
 `rekordbox_db.py`, `pioneer/` (`pdb` for `export.pdb`, `anlz` for analysis files, `waveform`,
-`onelibrary`, `keys` for the SQLCipher keys, `usb`), `serato/` (`binfile` for `database V2`/crates,
+`onelibrary`, `keys` for the SQLCipher keys, `usb`), `devices.py` (drive detection), `serato/` (`binfile` for `database V2`/crates,
 `markers` for the tag payloads, `tags` for audio-file I/O, `library`), `sync.py` (matching and
 merging), `convert.py` (read → remap paths → write, in place or new; `sync_libraries`),
 `offsets.py`, `grid.py`, `keys.py`, `colours.py`, `paths.py`, `cli.py`, `web/`. Tests use real

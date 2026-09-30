@@ -1,0 +1,139 @@
+"""Find removable drives (USB sticks) and what DJ libraries are on them.
+
+Mounts are read from ``/proc/self/mounts``: with the USB folder bind-mounted
+``rslave`` into the container, sticks mounted on the host after startup show up
+there, and disappear when unmounted. Where ``/proc`` doesn't list them (macOS
+hosts, where Docker Desktop shares ``/Volumes`` as a folder), folders under the
+USB roots that hold a Rekordbox or Serato library count as drives too.
+"""
+
+from __future__ import annotations
+
+import os
+import shutil
+from dataclasses import asdict, dataclass, field
+from pathlib import Path
+
+DEFAULT_ROOTS = ("/media", "/run/media", "/mnt", "/Volumes")
+# Filesystems that aren't drives even when mounted under a USB root.
+_VIRTUAL = {"proc", "sysfs", "devtmpfs", "devpts", "cgroup", "cgroup2", "overlay", "autofs",
+            "binfmt_misc", "debugfs", "tracefs", "securityfs", "pstore", "mqueue", "fusectl"}  # fmt: skip
+# Players up to the CDJ-2000NXS2 only read FAT32 (and MBR partition tables).
+_OLD_PLAYER_OK = {"vfat", "fat", "msdos"}
+
+
+@dataclass
+class Drive:
+    path: str
+    label: str
+    fstype: str = ""
+    device: str = ""
+    total_bytes: int = 0
+    free_bytes: int = 0
+    writable: bool = False
+    libraries: list[dict[str, str]] = field(
+        default_factory=list
+    )  # {"format", "path", "serato_root"}
+    notes: list[str] = field(default_factory=list)
+
+    def as_dict(self) -> dict[str, object]:
+        return asdict(self)
+
+
+def usb_roots() -> list[Path]:
+    value = os.environ.get("USB_ROOTS")
+    return [Path(p) for p in (value.split(":") if value else DEFAULT_ROOTS) if p]
+
+
+def _unescape(field_: str) -> str:
+    """/proc/mounts escapes spaces and other characters as octal (``\\040``)."""
+    out, i = [], 0
+    while i < len(field_):
+        if field_[i] == "\\" and i + 3 < len(field_) and field_[i + 1 : i + 4].isdigit():
+            out.append(chr(int(field_[i + 1 : i + 4], 8)))
+            i += 4
+        else:
+            out.append(field_[i])
+            i += 1
+    return "".join(out)
+
+
+def _mounts(mounts_file: Path) -> list[tuple[str, Path, str]]:
+    try:
+        lines = mounts_file.read_text().splitlines()
+    except OSError:
+        return []
+    result = []
+    for line in lines:
+        parts = line.split()
+        if len(parts) >= 3:
+            result.append((_unescape(parts[0]), Path(_unescape(parts[1])), parts[2]))
+    return result
+
+
+def _libraries(path: Path) -> list[dict[str, str]]:
+    found = []
+    for folder in ("PIONEER", ".PIONEER"):
+        rekordbox = path / folder / "rekordbox"
+        if (rekordbox / "export.pdb").is_file() or (rekordbox / "exportLibrary.db").is_file():
+            found.append({"format": "rekordbox_usb", "path": str(path)})
+            break
+    if (path / "_Serato_" / "database V2").is_file():
+        found.append({"format": "serato", "path": str(path / "_Serato_"), "serato_root": str(path)})
+    return found
+
+
+def _drive(path: Path, fstype: str = "", device: str = "") -> Drive:
+    drive = Drive(path=str(path), label=path.name, fstype=fstype, device=device)
+    try:
+        usage = shutil.disk_usage(path)
+        drive.total_bytes, drive.free_bytes = usage.total, usage.free
+    except OSError:
+        pass
+    drive.writable = os.access(path, os.W_OK)
+    drive.libraries = _libraries(path)
+    if not drive.writable:
+        drive.notes.append(
+            "Not writable here: check USB_MOUNT_MODE and that the container runs as your user."
+        )
+    if fstype and fstype not in _OLD_PLAYER_OK and fstype not in ("tmpfs", "fuseblk", ""):
+        drive.notes.append(
+            f"Formatted {fstype}: CDJ-2000NXS2 and older players only read FAT32 (the CDJ-3000 also reads exFAT)."
+        )
+    if fstype == "fuseblk":
+        drive.notes.append(
+            "A FUSE filesystem (often exFAT or NTFS): older players only read FAT32."
+        )
+    return drive
+
+
+def list_drives(
+    roots: list[Path] | None = None, mounts_file: Path = Path("/proc/self/mounts")
+) -> list[Drive]:
+    roots = [r.resolve() for r in (roots if roots is not None else usb_roots()) if r.exists()]
+    drives: dict[str, Drive] = {}
+    for device, mount_point, fstype in _mounts(mounts_file):
+        if fstype in _VIRTUAL:
+            continue
+        # A drive is a mount *below* a USB root, not the root's own bind mount.
+        if any(root in mount_point.parents for root in roots) and mount_point.is_dir():
+            drives[str(mount_point)] = _drive(mount_point, fstype, device)
+    # Folders holding a library, for hosts where /proc doesn't list the mounts.
+    for root in roots:
+        for depth in ("*", "*/*"):
+            try:
+                candidates = sorted(root.glob(depth))
+            except OSError:
+                continue
+            for candidate in candidates:
+                if (
+                    str(candidate) in drives
+                    or not candidate.is_dir()
+                    or candidate.name.startswith(".")
+                ):
+                    continue
+                if any(str(candidate).startswith(d + "/") for d in drives):
+                    continue
+                if _libraries(candidate):
+                    drives[str(candidate)] = _drive(candidate)
+    return sorted(drives.values(), key=lambda d: d.path)
