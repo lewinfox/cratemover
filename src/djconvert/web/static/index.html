@@ -9,34 +9,113 @@
 <body>
 <header>
   <h1>DJ Library Converter</h1>
-  <p class="sub">Mixxx ⇄ Rekordbox (USB, XML, library) ⇄ Serato: playlists, crates, cues, loops and beat grids.</p>
-  <nav class="tabs" role="tablist">
-    <button type="button" role="tab" data-tab="convert" aria-selected="true">Convert</button>
-    <button type="button" role="tab" data-tab="sync" aria-selected="false">Sync</button>
-  </nav>
+  <p class="sub">One tab per library found on this computer and on connected USB sticks.</p>
+  <nav class="tabs" id="tabs" role="tablist"></nav>
 </header>
 
 <main>
-<section class="card drives" id="drives-card">
-  <div class="inline"><h2>USB drives</h2><span class="muted" id="drives-status">Watching for sticks…</span></div>
-  <div id="drives"></div>
-</section>
-<!-- ============================== CONVERT ============================== -->
-<div id="tab-convert">
-  <section class="card">
-    <h2><span class="step">1</span> Source library</h2>
-    <div id="src-picker"></div>
-    <div id="suggestions" class="chips"></div>
-    <div class="actions"><button id="load-btn">Load library</button>
-      <label class="button secondary" title="Upload a rekordbox.xml, mixxxdb.sqlite or a zip of a _Serato_ folder">
-        Upload…<input type="file" id="upload" hidden>
+<!-- ============================== A LIBRARY ============================== -->
+<section class="card hidden" id="view">
+  <div class="view-head">
+    <div>
+      <h2 id="view-title"></h2>
+      <div class="muted" id="view-sub"></div>
+    </div>
+    <div class="view-actions" id="view-actions"></div>
+  </div>
+  <div id="view-notes"></div>
+  <div class="status" id="view-status"></div>
+
+  <!-- Export to… / Import from… -->
+  <div class="wizard hidden" id="wizard">
+    <h3 id="wiz-title"></h3>
+    <p><b id="wiz-pick-label"></b></p>
+    <div class="sources" id="wiz-choices"></div>
+    <div class="row hidden" id="wiz-format">
+      <label>Make the stick for
+        <select id="wiz-newformat">
+          <option value="rekordbox_usb">Rekordbox (CDJs, XDJs)</option>
+          <option value="serato">Serato</option>
+        </select>
       </label>
     </div>
-    <div class="status" id="load-status"></div>
-  </section>
+    <p><b>2. What?</b> <span id="wiz-what"></span></p>
+    <p class="hint" id="wiz-how"></p>
+    <details id="wiz-options">
+      <summary>Options</summary>
+      <div id="wiz-sync-opts">
+        <label class="check"><input type="checkbox" id="wiz-both"> Also bring changes back the other way (two-way sync of the whole library)</label>
+        <div class="row">
+          <label>Cues &amp; loops
+            <select id="wiz-cues">
+              <option value="merge">Merge (keep both sides')</option>
+              <option value="replace">Replace with the incoming ones</option>
+              <option value="fill">Only for tracks with none</option>
+            </select>
+          </label>
+          <label>Beat grids
+            <select id="wiz-grids">
+              <option value="fill">Only for tracks with none</option>
+              <option value="replace">Replace with the incoming ones</option>
+            </select>
+          </label>
+          <label>Tags (artist, genre, key…)
+            <select id="wiz-metadata">
+              <option value="fill">Fill empty fields</option>
+              <option value="replace">Replace with the incoming ones</option>
+            </select>
+          </label>
+          <label>Playlists
+            <select id="wiz-playlists">
+              <option value="merge">Merge same-named (add missing tracks)</option>
+              <option value="replace">Replace same-named</option>
+              <option value="add">Only add new playlists</option>
+            </select>
+          </label>
+        </div>
+        <label class="check"><input type="checkbox" id="wiz-add" checked> Add tracks the other library doesn't have (copying them onto USB sticks)</label>
+      </div>
+      <label class="check warn"><input type="checkbox" id="wiz-serato-tags"> Serato: write cues and grids into the audio files (Serato keeps them there)</label>
+      <label class="check"><input type="checkbox" id="wiz-waveforms" checked> Rekordbox stick: draw waveforms from the audio</label>
+      <label>Rekordbox stick: OneLibrary database (rekordbox 7, newest players)
+        <select id="wiz-onelibrary">
+          <option value="auto">If the stick already has one</option>
+          <option value="on">Always</option>
+          <option value="off">Never</option>
+        </select>
+      </label>
+    </details>
+    <div class="actions">
+      <button type="button" id="wiz-preview">3. Preview changes</button>
+      <button type="button" id="wiz-run"></button>
+      <button type="button" id="wiz-cancel" class="secondary">Cancel</button>
+    </div>
+    <div class="status" id="wiz-status"></div>
+    <div id="wiz-report"></div>
+  </div>
 
-  <section class="card hidden" id="library-card">
-    <h2><span class="step">2</span> Library</h2>
+  <!-- Convert a stick to the other format -->
+  <div class="wizard hidden" id="convert-panel">
+    <h3 id="cv-title"></h3>
+    <p class="hint" id="cv-hint"></p>
+    <label class="check"><input type="checkbox" id="cv-keep" checked> <span id="cv-keep-label"></span></label>
+    <label class="check"><input type="checkbox" id="cv-full"> <span id="cv-full-label"></span></label>
+    <label class="check" id="cv-tags-row"><input type="checkbox" id="cv-tags" checked> Write cues and grids into the audio files (their previous Serato tags are backed up)</label>
+    <div id="cv-rekordbox">
+      <label>Where rekordbox's computer sees this drive, for the <code>rekordbox.xml</code> put on it
+        <input id="cv-xmlroot"></label>
+      <label>OneLibrary (rekordbox 7, newest players)
+        <select id="cv-onelibrary"><option value="auto">If the drive already has one</option><option value="on">Yes</option><option value="off">No</option></select></label>
+    </div>
+    <div class="actions">
+      <button type="button" id="cv-run">Back up and convert</button>
+      <button type="button" id="cv-cancel" class="secondary">Cancel</button>
+    </div>
+    <div class="status" id="cv-status"></div>
+    <div id="cv-report"></div>
+  </div>
+
+  <div id="browser-pane" class="hidden">
     <div class="stats" id="stats"></div>
     <ul class="warnings" id="lib-warnings"></ul>
     <div class="split">
@@ -46,7 +125,7 @@
           <span><a href="#" id="select-all">all</a> · <a href="#" id="select-none">none</a></span>
         </div>
         <div id="tree"></div>
-        <p class="hint">Ticked playlists and their tracks are converted. With nothing ticked, the whole library is.</p>
+        <p class="hint">Tick playlists to export only those.</p>
       </div>
       <div class="tracks-pane">
         <div class="inline">
@@ -61,204 +140,33 @@
         <pre id="track-detail" class="hidden"></pre>
       </div>
     </div>
-  </section>
+  </div>
+  <div id="view-backups"></div>
+</section>
 
-  <section class="card hidden" id="target-card">
-    <h2><span class="step">3</span> Convert to</h2>
-    <div class="row">
-      <label>Format <select id="dst-format"></select></label>
-      <label>Key notation
-        <select id="dst-key">
-          <option value="">Target's default</option>
-          <option value="camelot">Camelot (8A)</option>
-          <option value="open_key">Open Key (1m)</option>
-          <option value="musical">Musical (Am)</option>
-        </select>
-      </label>
-    </div>
-    <div class="row" id="dst-mode-row">
-      <label class="check"><input type="radio" name="dst-mode" value="new" checked> Write a new library to the export folder</label>
-      <label class="check"><input type="radio" name="dst-mode" value="in_place"> Update an existing library in place (backs it up first)</label>
-    </div>
-    <div class="row">
-      <label id="dst-name-label">Output folder name <input id="dst-name" value="converted"></label>
-      <label class="grow hidden" id="dst-path-label"><span id="dst-path-caption">Library to update</span>
-        <div class="inline"><input id="dst-path" placeholder="/media/me/USB"><button type="button" class="secondary" data-browse="dst-path">Browse…</button></div>
-      </label>
-    </div>
-
-    <details open>
-      <summary>Track paths on the target <span class="muted">(path rewrite rules)</span></summary>
-      <p class="hint">If the target software runs on another computer or finds the music elsewhere, rewrite
-        the paths, one rule per line. Not needed for USB sticks: tracks are found or copied onto the stick.
-        Most common folders in this library:</p>
-      <div id="folders" class="chips"></div>
-      <textarea id="path-rules" rows="3" placeholder="/home/me/Music => /Users/me/Music"></textarea>
-    </details>
-
-    <div data-show-dst="rekordbox_usb">
-      <p class="hint">Choose the stick's mount point (or any folder). Tracks already on the stick are used where
-        they are; others are copied to <code>/Contents</code>. Writing again is quick (audio and waveforms
-        already on the stick are reused), and the previous <code>export.pdb</code> is kept as a backup.</p>
-      <label class="check"><input type="checkbox" id="dst-copy" checked> Copy tracks that aren't on the stick onto it</label>
-      <label class="check"><input type="checkbox" id="dst-waveforms" checked> Draw waveforms from the audio (ffmpeg; otherwise reused or flat)</label>
-      <div class="row">
-        <label>OneLibrary database
-          <select id="dst-onelibrary">
-            <option value="auto">If the stick already has one</option>
-            <option value="on">Always (CDJ-3000X, XDJ-AZ, OPUS-QUAD…)</option>
-            <option value="off">Never</option>
-          </select>
-        </label>
-        <label>Device name <input id="dst-device" placeholder="optional"></label>
-      </div>
-      <label>Where rekordbox's computer sees the stick, for the <code>rekordbox.xml</code> put on it
-        <input id="dst-xml-root" placeholder="the mount point here — or E:/ on Windows, /Volumes/NAME on a Mac"></label>
-      <p class="hint">rekordbox on a laptop shows a stick only in Export mode and can't play from it; import the
-        stick's <code>rekordbox.xml</code> (Preferences › Advanced › rekordbox xml) to get its tracks, cues and grids.
-        Mixxx and CDJs/XDJs play straight from the stick.</p>
-      <p class="hint">OneLibrary support is experimental: no third-party OneLibrary stick has a published hardware test.</p>
-    </div>
-    <div data-show-dst="serato">
-      <div class="row">
-        <label>Serato paths relative to
-          <input id="dst-serato-root" value="/" title="/ for the internal drive on a Mac; the stick's mount point (e.g. /media/me/USB) for a _Serato_ on a USB stick">
-        </label>
-        <label>Hot cue slots <select id="dst-serato-cues"><option>8</option><option>16</option></select></label>
-      </div>
-      <label class="check warn"><input type="checkbox" id="dst-serato-tags">
-        Write cues, loops and beat grids into the audio files (Serato keeps them there — this modifies
-        the music files, which must be mounted writable)</label>
-      <label class="check"><input type="checkbox" id="dst-serato-copy" checked> On a USB stick, copy tracks that aren't on it onto it</label>
-      <label data-show-mode="new">Merge into an existing <code>database V2</code> (optional)
-        <input id="dst-serato-base" placeholder="/sources/serato/_Serato_/database V2"></label>
-    </div>
-    <div data-show-dst="rekordbox_xml">
-      <label class="check"><input type="checkbox" id="dst-rb-memory" checked> Write memory cues and loops</label>
-      <label class="check"><input type="checkbox" id="dst-rb-hot-as-memory"> Also add a memory cue at every hot cue (handy on older CDJs)</label>
-    </div>
-    <div data-show-dst="mixxx">
-      <div class="row">
-        <label>Mixxx MP3 decoder
-          <select id="dst-mp3">
-            <option value="MAD">MAD / FFmpeg (Linux, Windows)</option>
-            <option value="CoreAudio">CoreAudio (macOS)</option>
-            <option value="FFmpeg">FFmpeg</option>
-          </select>
-        </label>
-        <label class="grow" data-show-mode="new">Merge into a copy of an existing <code>mixxxdb.sqlite</code> (optional)
-          <input id="dst-mixxx-base" placeholder="/sources/mixxx/mixxxdb.sqlite"></label>
-      </div>
-      <label class="check"><input type="checkbox" id="dst-mixxx-crates"> Write playlists as crates</label>
-      <p class="hint" data-show-mode="in_place">Quit Mixxx before updating its library.</p>
-    </div>
-    <label class="check" data-show-dst="serato mixxx"><input type="checkbox" id="dst-mem-to-hot" checked>
-      Put memory cues into free hot cue slots (Serato and Mixxx have no memory cues)</label>
-
-    <div class="actions"><button id="convert-btn">Convert</button></div>
-    <div class="status" id="convert-status"></div>
-  </section>
-
-  <section class="card hidden" id="result-card">
-    <h2><span class="step">4</span> Result</h2>
-    <div class="stats" id="result-stats"></div>
-    <div id="result-files"></div>
-    <ul class="warnings" id="result-warnings"></ul>
-    <div id="next-steps"></div>
-  </section>
-</div>
-
-<!-- ============================== SYNC ============================== -->
-<div id="tab-sync" class="hidden">
-  <section class="card">
-    <h2>Libraries</h2>
-    <p class="hint">Sync matches tracks between two libraries (by path, then file name and size, then artist, title
-      and length), adds what's missing and merges cues, grids, metadata and playlists. Libraries are updated in
-      place, with a backup of each file changed. Quit the DJ software first. Rekordbox's own library
-      (<code>master.db</code>) can only be a source; sync to Rekordbox through a USB stick or XML.</p>
-    <div class="split2">
-      <div class="side"><h3>A</h3><div id="sync-a"></div></div>
-      <div class="side"><h3>B</h3><div id="sync-b"></div></div>
-    </div>
-    <div id="sync-suggestions" class="chips"></div>
-  </section>
-
-  <section class="card">
-    <h2>How</h2>
-    <div class="row">
-      <label>Direction
-        <select id="sync-direction">
-          <option value="both">Both ways (A ⇄ B)</option>
-          <option value="a_to_b">A → B (update B)</option>
-          <option value="b_to_a">B → A (update A)</option>
-        </select>
-      </label>
-      <label>When both have a value
-        <select id="sync-prefer">
-          <option value="incoming">A wins (both ways) / the source wins (one way)</option>
-          <option value="base">B wins (both ways) / keep the target's (one way)</option>
-        </select>
-      </label>
-    </div>
-    <div class="row">
-      <label>Cues &amp; loops
-        <select id="sync-cues">
-          <option value="merge">Merge (winner's slots, plus the other's in free slots)</option>
-          <option value="replace">Replace with the winner's</option>
-          <option value="fill">Only for tracks with none</option>
-        </select>
-      </label>
-      <label>Beat grids
-        <select id="sync-grids">
-          <option value="fill">Only for tracks with none</option>
-          <option value="replace">Replace with the winner's</option>
-        </select>
-      </label>
-      <label>Tags (artist, genre, key…)
-        <select id="sync-metadata">
-          <option value="fill">Fill empty fields</option>
-          <option value="replace">Replace with the winner's</option>
-        </select>
-      </label>
-      <label>Playlists
-        <select id="sync-playlists">
-          <option value="merge">Merge same-named (add missing tracks)</option>
-          <option value="replace">Replace same-named</option>
-          <option value="add">Only add new playlists</option>
-        </select>
-      </label>
-    </div>
-    <label class="check"><input type="checkbox" id="sync-add" checked> Add tracks the other library doesn't have (copying them onto USB sticks)</label>
-    <details>
-      <summary>Track paths <span class="muted">(A paths ⇒ B paths)</span></summary>
-      <p class="hint">Used to match tracks by path and to place new tracks. Reversed automatically for B → A.
-        Not needed for USB sticks.</p>
-      <textarea id="sync-rules" rows="3" placeholder="/home/me/Music => /Users/me/Music"></textarea>
-    </details>
-    <details>
-      <summary>Format options for the libraries being written</summary>
-      <label class="check warn"><input type="checkbox" id="sync-serato-tags"> Serato: write cues and grids into the audio files</label>
-      <label class="check"><input type="checkbox" id="sync-waveforms" checked> Rekordbox USB: draw waveforms from the audio</label>
-      <label>Rekordbox USB OneLibrary
-        <select id="sync-onelibrary">
-          <option value="auto">If the stick already has one</option>
-          <option value="on">Always</option>
-          <option value="off">Never</option>
-        </select>
-      </label>
-    </details>
-    <div class="actions">
-      <button id="sync-preview" class="secondary">Preview</button>
-      <button id="sync-run">Sync</button>
-    </div>
-    <div class="status" id="sync-status"></div>
-  </section>
-
-  <section class="card hidden" id="sync-result">
-    <h2 id="sync-result-title">Result</h2>
-    <div id="sync-report"></div>
-  </section>
-</div>
+<!-- ============================== OTHER ============================== -->
+<section class="card hidden" id="other-card">
+  <h2>Open another library</h2>
+  <p class="hint">Choose a folder or file. The app works out what kind of library it is and adds a tab for it.</p>
+  <div class="inline"><input id="other-path" placeholder="/path/to/library folder">
+    <button type="button" class="secondary" id="other-browse">Browse…</button>
+    <button type="button" id="other-open">Open</button>
+    <label class="button secondary" title="Upload a rekordbox.xml, mixxxdb.sqlite or a zip of a _Serato_ folder">
+      Upload…<input type="file" id="upload" hidden>
+    </label>
+  </div>
+  <div class="status" id="other-status"></div>
+  <details>
+    <summary>Settings</summary>
+    <label>Mixxx MP3 decoder
+      <select id="set-mp3">
+        <option value="MAD">MAD / FFmpeg (Linux, Windows)</option>
+        <option value="CoreAudio">CoreAudio (macOS)</option>
+        <option value="FFmpeg">FFmpeg</option>
+      </select>
+    </label>
+  </details>
+</section>
 </main>
 
 <dialog id="browser">
@@ -268,38 +176,6 @@
     <div class="actions"><button type="button" id="browser-pick" class="secondary">Use this folder</button></div>
   </form>
 </dialog>
-
-<template id="picker-template">
-  <div class="row">
-    <label>Format <select data-field="format"></select></label>
-    <label class="grow">Location
-      <div class="inline"><input data-field="path" placeholder="/sources/mixxx/mixxxdb.sqlite">
-        <button type="button" class="secondary" data-browse>Browse…</button></div>
-    </label>
-  </div>
-  <p class="hint" data-field="hint"></p>
-  <div class="row" data-show-format="serato">
-    <label>Serato paths are relative to
-      <input data-field="serato_root" value="/" title="/ for ~/Music/_Serato_ on a Mac, C:/ on Windows, or the drive's mount point for a _Serato_ on a USB stick">
-    </label>
-    <label class="check"><input type="checkbox" data-field="read_file_tags" checked> Read cues and grids from the audio files</label>
-  </div>
-  <div class="row" data-show-format="mixxx">
-    <label>Mixxx MP3 decoder
-      <select data-field="mp3_decoder">
-        <option value="MAD">MAD / FFmpeg (Linux, Windows)</option>
-        <option value="CoreAudio">CoreAudio (macOS)</option>
-        <option value="FFmpeg">FFmpeg</option>
-      </select>
-    </label>
-  </div>
-  <details>
-    <summary>Where are the music files? <span class="muted">(file access rules)</span></summary>
-    <p class="hint">If the library's paths are not where this app sees the files, map them, one per line:
-      <code>/Users/me/Music =&gt; /music</code></p>
-    <textarea data-field="access_rules" rows="2" placeholder="/Users/me/Music => /home/me/Music"></textarea>
-  </details>
-</template>
 
 <script src="app.js"></script>
 </body>

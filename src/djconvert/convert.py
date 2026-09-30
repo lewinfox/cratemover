@@ -17,7 +17,7 @@ from .keys import KeyNotation
 from .mixxx import MixxxReadOptions, MixxxWriteOptions, find_database, read_mixxx, write_mixxx
 from .model import Library, Playlist
 from .offsets import Mp3Decoder
-from .paths import apply_rules, make_resolver
+from .paths import apply_rules, infer_access_rules, make_resolver
 from .rekordbox_xml import RekordboxWriteOptions, read_rekordbox_xml, write_rekordbox_xml
 from .serato.library import (
     CRATE_DIR,
@@ -61,6 +61,9 @@ class ReadOptions:
     mp3_decoder: Mp3Decoder = "MAD"
     serato_root: str = "/"
     read_file_tags: bool = True
+    # Folders to look for the music in when the library's own paths don't exist here
+    # (another OS, another mount point). Found mappings are added to access_rules.
+    music_roots: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -123,6 +126,16 @@ def read_library(options: ReadOptions, progress: Progress = _noop) -> Library:
         )
     else:
         raise ValueError(f"unknown source format {options.format!r}")
+    if options.music_roots:
+        missing = [t.location for t in library.tracks.values() if resolve(t.location) is None]
+        roots, options.music_roots = [Path(r) for r in options.music_roots], []
+        if rules := infer_access_rules(missing, roots):
+            progress("Found the music files: " + ", ".join(f"{a} => {b}" for a, b in rules))
+            options.access_rules = [*options.access_rules, *rules]
+            # Mixxx and Serato read from the audio files, so read again now they resolve.
+            if options.format in ("mixxx", "serato"):
+                return read_library(options, progress)
+            resolve = make_resolver(options.access_rules)
     for track in library.tracks.values():
         track.grid = gridlib.simplify(track.grid)
         if found := resolve(track.location):
@@ -400,10 +413,12 @@ def sync_libraries(
     options: SyncOptions,
     dry_run: bool = False,
     progress: Progress = _noop,
+    playlists: list[str] | None = None,
 ) -> SyncResult:
     """Merge A into B and/or B into A and write the results in place.
 
     ``options.path_rules`` map A's paths to B's; they are inverted for B -> A.
+    ``playlists`` limits what A sends to B to those playlists and their tracks.
     """
     progress("Reading library A")
     lib_a = read_library(a.read, progress)
@@ -422,6 +437,8 @@ def sync_libraries(
         opts.path_rules = rules
         if direction == "both" and name == "b_to_a":
             opts.prefer = Prefer.BASE if options.prefer is Prefer.INCOMING else Prefer.INCOMING
+        if name == "a_to_b" and playlists:
+            incoming = select(incoming, playlists)
         progress(f"Merging ({name.replace('_', ' ')})")
         merged, report = merge(base, incoming, opts)
         outcome: dict[str, Any] = {"report": report.as_dict(), "summary": merged.summary()}

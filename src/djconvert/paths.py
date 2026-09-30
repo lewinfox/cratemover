@@ -57,3 +57,38 @@ def make_resolver(access_rules: list[tuple[str, str]]) -> Callable[[str], Path |
         return path if path.is_file() else None
 
     return resolve
+
+
+def infer_access_rules(
+    locations: list[str], roots: list[Path], sample: int = 200
+) -> list[tuple[str, str]]:
+    """Guess file-access rules by looking for the tracks under the folders we can see.
+
+    For ``C:/users/dj/Music/house/a.mp3`` and a root ``/home/me/Music`` holding
+    ``house/a.mp3``, the rule is ``C:/users/dj/Music => /home/me/Music``.
+    """
+    step = max(1, len(locations) // sample)
+    votes: dict[tuple[str, str], int] = {}
+    for location in locations[::step]:
+        parts = normalise_path(location).split("/")
+        hit = None
+        for i in range(1, len(parts)):
+            prefix = "/".join(parts[:i])
+            if not prefix:
+                continue
+            for root in roots:
+                try:
+                    if root.joinpath(*parts[i:]).is_file():
+                        hit = (prefix, str(root))
+                        break
+                except OSError:
+                    continue
+            if hit:
+                break
+        if hit and hit[0] != hit[1]:
+            votes[hit] = votes.get(hit, 0) + 1
+    best: dict[str, tuple[str, int]] = {}
+    for (prefix, root), count in votes.items():
+        if prefix not in best or count > best[prefix][1]:
+            best[prefix] = (root, count)
+    return [(prefix, root) for prefix, (root, _) in best.items()]

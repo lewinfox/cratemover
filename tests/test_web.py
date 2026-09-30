@@ -63,6 +63,14 @@ def test_inspect_convert_download(client: TestClient, mixxx_root: Path) -> None:
     assert client.get("/api/download", params={"path": "../../etc/passwd"}).status_code == 403
 
 
+def test_inspect_detects_the_format(client: TestClient, mixxx_root: Path) -> None:
+    job = client.post("/api/inspect", json={"path": str(mixxx_root / "mixxx")}).json()
+    assert _wait(client, job["job_id"])["format"] == "mixxx"
+    assert client.post("/api/inspect", json={"path": str(mixxx_root / "nope")}).status_code == 400
+    sources = client.get("/api/sources").json()["sources"]
+    assert {"format": "mixxx", "path": str(mixxx_root / "mixxx" / "mixxxdb.sqlite")} in sources
+
+
 def test_upload_rekordbox_xml(client: TestClient) -> None:
     xml = (Path(__file__).parent / "fixtures/rekordbox/rekordbox6-database.xml").read_bytes()
     path = client.post("/api/upload", files={"file": ("rekordbox.xml", xml)}).json()["path"]
@@ -111,3 +119,39 @@ def test_sync_endpoint_preview_and_run(
 def test_drives_endpoint(client: TestClient) -> None:
     body = client.get("/api/drives").json()
     assert "drives" in body and body["roots"]
+
+
+def test_sync_sends_only_the_chosen_playlists(library_copy: Path, tmp_path: Path) -> None:
+    from djconvert.convert import (
+        ReadOptions,
+        SyncSide,
+        WriteOptions,
+        playlist_paths,
+        read_library,
+        sync_libraries,
+        write_library,
+    )
+    from djconvert.sync import SyncOptions
+
+    mixxx = ReadOptions("mixxx", str(library_copy / "mixxx"))
+    source = read_library(mixxx)
+    one = playlist_paths(source)[0]
+    stick = tmp_path / "STICK"
+    stick.mkdir()
+    usb = WriteOptions("rekordbox_usb", str(stick), waveforms=False, usb_xml=False)
+    write_library(source, WriteOptions(**{**usb.__dict__, "playlists": [one]}), [])
+
+    def added(playlists: list[str]) -> int:
+        result = sync_libraries(
+            SyncSide(mixxx, WriteOptions("mixxx", "")),
+            SyncSide(ReadOptions("rekordbox_usb", str(stick)), usb),
+            "a_to_b",
+            SyncOptions(),
+            dry_run=True,
+            playlists=playlists,
+        )
+        return result.a_to_b["report"]["added"]
+
+    # Everything in the playlist is on the stick already (bar the Ogg file, stored as MP3).
+    assert added([one]) <= 1
+    assert added([]) > added([one])

@@ -1,34 +1,33 @@
 "use strict";
 
 const $ = (id) => document.getElementById(id);
-const state = { info: null, library: null, selected: new Set(), currentPlaylist: "", pickers: {} };
-
-const HINTS = {
-  mixxx: "Mixxx's mixxxdb.sqlite, or the folder holding it (~/.mixxx on Linux).",
-  rekordbox_usb: "A Rekordbox USB stick: its mount point (the folder holding PIONEER/). Cues, grids and waveforms come from its analysis files.",
-  rekordbox_xml: "In Rekordbox: File › Export Collection in xml format. Choose or upload that file.",
-  rekordbox_db: "Rekordbox 6/7's own library: the rekordbox folder (~/Library/Pioneer/rekordbox on a Mac, " +
-    "%APPDATA%\\Pioneer\\rekordbox on Windows) or its master.db. Beat grids come from its share/ folder.",
-  serato: "A _Serato_ folder (~/Music/_Serato_, or at the root of a USB stick), or the folder holding it. " +
-    "Cue points and beat grids are read from the music files, so they must be reachable too.",
+const state = {
+  tabs: [], active: null,         // one tab per library or drive; "other" is the open-a-folder tab
+  sources: [], extra: [],         // libraries the server found, and ones opened by hand
+  drives: [], roots: [], backups: [],
+  libs: {},                       // tab key -> loaded library (the /api/inspect result)
+  selected: new Set(), currentPlaylist: "",
+  wizard: null,                   // the open action: { kind: export|import|convert, src, dst, ... }
 };
 
+const NAMES = {
+  mixxx: "Mixxx", rekordbox_db: "Rekordbox", rekordbox_usb: "Rekordbox",
+  rekordbox_xml: "Rekordbox XML", serato: "Serato",
+};
+const STICK_FORMATS = { rekordbox_usb: "Rekordbox", serato: "Serato" };
+
 const NEXT_STEPS = {
-  rekordbox_xml: `<h3>Importing into Rekordbox</h3><ol>
-    <li>Rekordbox › Preferences › Advanced › Database › <i>rekordbox xml</i> › Imported Library: choose <code>rekordbox.xml</code>.</li>
+  rekordbox_xml: `<h4>Importing into Rekordbox</h4><ol>
+    <li>Rekordbox › Preferences › Advanced › Database › <i>rekordbox xml</i> › Imported Library: choose the file above.</li>
     <li>It appears under <b>rekordbox xml</b> in the tree (enable it under Preferences › View › Layout if not).</li>
     <li>Right-click playlists there › <i>Import Playlist</i>.</li></ol>`,
-  rekordbox_usb: `<h3>Using the stick</h3><ol>
-    <li>Eject it safely, then plug it into the laptop (Rekordbox shows it under Devices; Mixxx lists it under Rekordbox) or into a player. Pre-NXS2 players only play MP3 reliably.</li>
-    <li>If Rekordbox ever loses playlist entries on it (one report says Rekordbox 7 did this to another tool's stick), write it again: it's quick, and the old <code>export.pdb</code> is kept as a backup.</li>
+  rekordbox_usb: `<h4>Using the stick</h4><ol>
+    <li>Eject it safely, then plug it into a player, or into the laptop (Rekordbox shows it under Devices; Mixxx lists it under Rekordbox). Pre-NXS2 players only play MP3 reliably.</li>
     <li>If something looks wrong, the previous <code>export.pdb</code> is kept next to the new one with a <code>.djconvert-…</code> suffix.</li></ol>`,
-  serato: `<h3>Using it in Serato</h3><ol>
-    <li>Quit Serato. For a new library, copy the generated <code>database V2</code> and <code>Subcrates</code> into your <code>_Serato_</code> folder (back it up first).</li>
-    <li>Updated in place? Just start Serato.</li>
-    <li>Cue points, loops and beat grids come from the files' tags, if you chose to write them.</li></ol>`,
-  mixxx: `<h3>Using it in Mixxx</h3><ol>
-    <li>Updated in place? Start Mixxx; a backup of the old database sits next to it.</li>
-    <li>New library: quit Mixxx, back up <code>mixxxdb.sqlite</code> and replace it with the generated one.</li></ol>`,
+  serato: `<h4>Using it in Serato</h4><ol>
+    <li>Start Serato. Cue points, loops and beat grids come from the files' tags, if you chose to write them.</li></ol>`,
+  mixxx: `<h4>Using it in Mixxx</h4><ol>
+    <li>Start Mixxx; a backup of the old database sits next to it.</li></ol>`,
 };
 
 async function api(path, options = {}) {
@@ -64,317 +63,502 @@ function escapeHtml(text) {
   return String(text ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 }
 
-function showFor(root, attr, value) {
-  root.querySelectorAll(`[${attr}]`).forEach((el) => {
-    el.classList.toggle("hidden", !el.getAttribute(attr).split(" ").includes(value));
-  });
-}
-
 function stat(label, value) {
   return `<div class="stat"><b>${escapeHtml(value)}</b><span>${escapeHtml(label)}</span></div>`;
 }
-
-const options = (formats) => Object.entries(formats)
-  .map(([k, v]) => `<option value="${k}">${escapeHtml(v)}</option>`).join("");
-
-// --- library pickers -----------------------------------------------------------------------
-
-function makePicker(container, formats) {
-  container.appendChild($("picker-template").content.cloneNode(true));
-  const field = (name) => container.querySelector(`[data-field="${name}"]`);
-  field("format").innerHTML = options(formats);
-  const update = () => {
-    field("hint").textContent = HINTS[field("format").value] || "";
-    showFor(container, "data-show-format", field("format").value);
-  };
-  field("format").addEventListener("change", update);
-  container.querySelector("[data-browse]").addEventListener("click", () => openBrowser(field("path")));
-  update();
-  return {
-    field,
-    set(entry) {
-      field("format").value = entry.format;
-      field("path").value = entry.path;
-      if (entry.serato_root) field("serato_root").value = entry.serato_root;
-      update();
-    },
-    value() {
-      return {
-        format: field("format").value,
-        path: field("path").value.trim(),
-        access_rules: field("access_rules").value,
-        mp3_decoder: field("mp3_decoder").value,
-        serato_root: field("serato_root").value.trim() || "/",
-        read_file_tags: field("read_file_tags").checked,
-      };
-    },
-  };
-}
-
-function suggestionChips(el, onPick) {
-  el.innerHTML = state.info.suggestions.map((s, i) =>
-    `<button type="button" class="chip" data-i="${i}">${escapeHtml(state.info.formats[s.format])}: ${escapeHtml(s.path)}</button>`).join("");
-  el.onclick = (e) => {
-    const chip = e.target.closest(".chip");
-    if (chip) onPick(state.info.suggestions[Number(chip.dataset.i)]);
-  };
-}
-
-// --- setup ------------------------------------------------------------------------------
-
-async function init() {
-  state.info = await api("/api/info");
-  state.pickers.src = makePicker($("src-picker"), state.info.source_formats);
-  state.pickers.a = makePicker($("sync-a"), state.info.source_formats);
-  state.pickers.b = makePicker($("sync-b"), state.info.source_formats);
-  $("dst-format").innerHTML = options(state.info.target_formats);
-  $("dst-format").value = "rekordbox_usb";
-
-  suggestionChips($("suggestions"), (s) => state.pickers.src.set(s));
-  let next = "a";
-  suggestionChips($("sync-suggestions"), (s) => {
-    state.pickers[next].set(s);
-    next = next === "a" ? "b" : "a";
-  });
-
-  document.querySelectorAll("[data-tab]").forEach((tab) => tab.addEventListener("click", () => switchTab(tab.dataset.tab)));
-
-  $("dst-format").addEventListener("change", updateTarget);
-  document.querySelectorAll("input[name=dst-mode]").forEach((r) => r.addEventListener("change", updateTarget));
-  document.querySelectorAll("button[data-browse]").forEach((b) => {
-    if (b.dataset.browse) b.addEventListener("click", () => openBrowser($(b.dataset.browse)));
-  });
-  updateTarget();
-
-  watchDrives();
-  $("load-btn").addEventListener("click", loadLibrary);
-  $("convert-btn").addEventListener("click", convert);
-  $("upload").addEventListener("change", uploadFile);
-  $("select-all").addEventListener("click", (e) => { e.preventDefault(); selectAll(true); });
-  $("select-none").addEventListener("click", (e) => { e.preventDefault(); selectAll(false); });
-  $("sync-preview").addEventListener("click", () => runSync(true));
-  $("sync-run").addEventListener("click", () => runSync(false));
-  let searchTimer;
-  $("track-search").addEventListener("input", () => {
-    clearTimeout(searchTimer);
-    searchTimer = setTimeout(() => showTracks(state.currentPlaylist), 250);
-  });
-  $("folders").addEventListener("click", (e) => {
-    const chip = e.target.closest(".chip");
-    if (!chip) return;
-    const rules = $("path-rules");
-    rules.value = (rules.value.trim() ? rules.value.trim() + "\n" : "") + `${chip.dataset.folder} => `;
-    rules.focus();
-  });
-}
-
-function targetMode() {
-  if ($("dst-format").value === "rekordbox_usb") return "in_place";
-  return document.querySelector("input[name=dst-mode]:checked").value;
-}
-
-function updateTarget() {
-  const format = $("dst-format").value;
-  const mode = targetMode();
-  showFor($("target-card"), "data-show-dst", format);
-  showFor($("target-card"), "data-show-mode", mode);
-  $("dst-mode-row").classList.toggle("hidden", format === "rekordbox_usb");
-  $("dst-name-label").classList.toggle("hidden", mode !== "new");
-  $("dst-path-label").classList.toggle("hidden", mode === "new");
-  $("dst-path-caption").textContent = format === "rekordbox_usb" ? "USB stick (mount point) or folder"
-    : { mixxx: "mixxxdb.sqlite to update", serato: "_Serato_ folder to update (or the drive holding it)",
-        rekordbox_xml: "rekordbox.xml to overwrite" }[format];
-}
-
-// --- USB drives (hot-plug) -------------------------------------------------------------
-
-const FORMAT_SHORT = { rekordbox_usb: "Rekordbox", serato: "Serato" };
 
 function gb(bytes) {
   return bytes >= 1e9 ? `${(bytes / 1e9).toFixed(1)} GB` : `${Math.round(bytes / 1e6)} MB`;
 }
 
-async function watchDrives() {
-  await refreshBackups();
-  let known = null;
-  let signature = "";
+const warningList = (warnings) => `<ul class="warnings">${warnings.map((w) => `<li>${escapeHtml(w)}</li>`).join("")}</ul>`;
+
+// --- tabs: one per library, one per drive without a library -----------------------------------
+
+function buildTabs() {
+  const tabs = [];
+  for (const s of [...state.sources, ...state.extra]) {
+    const key = `${s.format}:${s.path}`;
+    if (tabs.some((t) => t.key === key)) continue;
+    const drive = state.drives.find((d) => s.path === d.path || s.path.startsWith(d.path + "/"));
+    let label = NAMES[s.format] || "Library";
+    if (drive) label = `USB: ${drive.label} (${label})`;
+    else if (s.format === "rekordbox_xml") label = `XML: ${s.path.split("/").pop()}`;
+    tabs.push({ key, ...s, drive, label });
+  }
+  for (const d of state.drives) {
+    if (!tabs.some((t) => t.drive === d)) {
+      tabs.push({ key: `drive:${d.path}`, format: "", path: d.path, drive: d, label: `USB: ${d.label} (no library)` });
+    }
+  }
+  for (const t of tabs) {
+    if (tabs.filter((o) => o.label === t.label).length > 1) t.label += ` — ${t.path}`;
+  }
+  return tabs.sort((a, b) => Boolean(a.drive) - Boolean(b.drive));
+}
+
+const tabByKey = (key) => state.tabs.find((t) => t.key === key);
+const activeTab = () => tabByKey(state.active);
+
+function renderTabs() {
+  $("tabs").innerHTML = state.tabs.map((t) =>
+    `<button type="button" role="tab" data-key="${escapeHtml(t.key)}" aria-selected="${t.key === state.active}">${escapeHtml(t.label)}</button>`).join("") +
+    `<button type="button" role="tab" data-key="other" aria-selected="${state.active === "other"}">Other…</button>`;
+}
+
+function selectTab(key) {
+  state.active = key;
+  state.wizard = null;
+  state.selected = new Set();
+  renderTabs();
+  renderHead();
+  renderWizard();
+  renderBrowser();
+  const tab = activeTab();
+  if (tab && tab.format && !state.libs[tab.key]) loadTab(tab).catch(() => {});
+}
+
+async function refresh() {
+  const [drives, sources] = await Promise.all([api("/api/drives"), api("/api/sources")]);
+  state.drives = drives.drives;
+  state.roots = drives.roots;
+  state.sources = sources.sources;
+  try { state.backups = (await api("/api/backups")).backups; } catch (_) { state.backups = []; }
+  state.tabs = buildTabs();
+  if (state.active !== "other" && !activeTab()) {
+    selectTab(state.tabs.length ? state.tabs[0].key : "other");
+  } else {
+    renderTabs();
+    renderHead();
+    renderWizard();
+  }
+}
+
+function watchDrives() {
+  const sign = (drives) => drives.map((d) => `${d.path}:${d.libraries.map((l) => l.format).join(",")}:${d.writable}`).join("\n");
   const tick = async () => {
     try {
-      const { drives, roots } = await api("/api/drives");
-      const paths = drives.map((d) => d.path);
-      if (known !== null) {
-        const added = drives.filter((d) => !known.includes(d.path));
-        const removed = known.filter((p) => !paths.includes(p));
-        if (added.length) $("drives-status").textContent = `Connected: ${added.map((d) => d.label).join(", ")}`;
-        else if (removed.length) $("drives-status").textContent = `Removed: ${removed.map((p) => p.split("/").pop()).join(", ")}`;
-      }
-      const now = drives.map((d) => `${d.path}:${d.libraries.map((l) => l.format).join(",")}:${d.writable}`).join("\n");
-      if (now !== signature || !$("drives").childElementCount) {
-        renderDrives(drives, roots, known === null ? [] : paths.filter((p) => !known.includes(p)));
-        signature = now;
-      }
-      known = paths;
-    } catch (_) {
-      $("drives-status").textContent = "Can't list drives right now.";
-    }
+      const { drives } = await api("/api/drives");
+      if (sign(drives) !== sign(state.drives)) await refresh();
+    } catch (_) { /* try again next time */ }
     setTimeout(tick, 3000);
   };
-  tick();
+  setTimeout(tick, 3000);
 }
 
-const drivePanels = {};  // drive path -> { target, status, error, result }
-let lastDrives = { drives: [], roots: [] };
-let backupsCache = [];
+// --- loading and browsing a library ------------------------------------------------------------
 
-async function refreshBackups() {
-  try { backupsCache = (await api("/api/backups")).backups; } catch (_) { backupsCache = []; }
-}
+const readRequest = (tab) => ({
+  format: tab.format, path: tab.path, serato_root: tab.serato_root || "/", mp3_decoder: $("set-mp3").value,
+});
 
-function convertPanel(d, i) {
-  const panel = drivePanels[d.path];
-  if (!panel) return "";
-  const name = FORMAT_SHORT[panel.target];
-  const source = d.libraries.map((l) => FORMAT_SHORT[l.format]).join(" + ");
-  const used = d.total_bytes - d.free_bytes;
-  if (panel.result) {
-    const r = panel.result;
-    return `<div class="panel"><b>Converted to ${escapeHtml(name)}.</b> Backup: <code>${escapeHtml(r.backup)}</code>
-      ${r.removed.length ? `<br>Removed the old ${escapeHtml(r.removed.join(", "))} library.` : ""}
-      <ul class="warnings">${r.warnings.map((w) => `<li>${escapeHtml(w)}</li>`).join("")}</ul>
-      <button type="button" class="chip" data-act="close" data-i="${i}">Close</button></div>`;
-  }
-  return `<div class="panel">
-    <b>Convert ${escapeHtml(d.label)} (${escapeHtml(source)}) to ${escapeHtml(name)}</b>
-    <p class="hint">The ${escapeHtml(name)} library is written onto this drive, using the audio already on it. A backup comes first.</p>
-    <label class="check"><input type="checkbox" data-opt="keep" checked> Keep the ${escapeHtml(source)} library too (the drive then works in both)</label>
-    <label class="check"><input type="checkbox" data-opt="full"> Back up the whole drive (${gb(used)}), not just the library folders</label>
-    ${panel.target === "serato" ? '<label class="check"><input type="checkbox" data-opt="tags" checked> Write cues and grids into the audio files (their previous Serato tags are backed up)</label>' : ""}
-    ${panel.target === "rekordbox_usb" ? `<label>Where rekordbox's computer sees this drive (for <code>rekordbox.xml</code>)
-      <input data-opt="xmlroot" placeholder="${escapeHtml(d.path)} — or E:/ on Windows, /Volumes/${escapeHtml(d.label)} on a Mac"></label>
-      <label>OneLibrary (rekordbox 7, newest players)
-      <select data-opt="onelibrary"><option value="auto">If the drive already has one</option><option value="on">Yes</option><option value="off">No</option></select></label>` : ""}
-    <div class="actions"><button type="button" data-act="run" data-i="${i}" ${panel.status ? "disabled" : ""}>Back up and convert</button>
-      <button type="button" class="secondary" data-act="close" data-i="${i}">Cancel</button></div>
-    <div class="status${panel.error ? " error" : ""}">${escapeHtml(panel.error || panel.status || "")}</div>
-  </div>`;
-}
+const loading = {};
 
-function backupsFor(d, i) {
-  const mine = backupsCache.filter((b) => b.drive === d.path || b.label === d.label);
-  if (!mine.length) return "";
-  return `<details><summary>${mine.length} backup(s)</summary><ul class="backups">${mine.map((b, k) =>
-    `<li>${escapeHtml(b.created)} · ${b.full ? "whole drive" : "library folders"} · ${gb(b.size_bytes)}
-      <button type="button" class="chip" data-act="restore" data-i="${i}" data-k="${k}">Restore</button></li>`).join("")}</ul></details>`;
-}
-
-function renderDrives(drives, roots, fresh) {
-  lastDrives = { drives, roots };
-  if (!drives.length) {
-    $("drives").innerHTML = `<p class="hint">No USB drives mounted under ${escapeHtml(roots.join(", "))}. Plug one in; it appears here within a few seconds.</p>`;
-    return;
-  }
-  $("drives").innerHTML = drives.map((d, i) => {
-    const formats = d.libraries.map((l) => l.format);
-    const libs = d.libraries.map((l, j) => `<span class="pill">${escapeHtml(FORMAT_SHORT[l.format] || l.format)}</span>
-      <button type="button" class="chip" data-act="open" data-i="${i}" data-j="${j}">Open</button>
-      <button type="button" class="chip" data-act="a" data-i="${i}" data-j="${j}">Sync A</button>
-      <button type="button" class="chip" data-act="b" data-i="${i}" data-j="${j}">Sync B</button>`).join(" ");
-    const convert = formats.length ? Object.keys(FORMAT_SHORT).map((t) =>
-      `<button type="button" data-act="convert" data-target="${t}" data-i="${i}" ${formats.length === 1 && formats[0] === t ? "disabled" : ""}>
-        Convert drive to ${FORMAT_SHORT[t]}</button>`).join(" ") : "";
-    return `<div class="drive${fresh.includes(d.path) ? " fresh" : ""}">
-      <div><b>${escapeHtml(d.label)}</b> <span class="muted">${escapeHtml(d.path)} · ${escapeHtml(d.fstype || "?")} · ${gb(d.free_bytes)} free of ${gb(d.total_bytes)}</span></div>
-      <div class="chips">${libs || '<span class="muted">No DJ library yet.</span>'}</div>
-      ${convert ? `<div class="actions">${convert}</div>` : ""}
-      ${convertPanel(d, i)}
-      <div class="chips"><span class="muted">Export a loaded library here:</span>
-        <button type="button" class="chip" data-act="rekordbox" data-i="${i}">Rekordbox</button>
-        <button type="button" class="chip" data-act="serato" data-i="${i}">Serato</button></div>
-      ${d.notes.map((n) => `<div class="note">${escapeHtml(n)}</div>`).join("")}
-      ${backupsFor(d, i)}
-    </div>`;
-  }).join("");
-  $("drives").onclick = onDriveClick;
-}
-
-function rerenderDrives() {
-  renderDrives(lastDrives.drives, lastDrives.roots, []);
-}
-
-async function onDriveClick(e) {
-  const btn = e.target.closest("[data-act]");
-  if (!btn) return;
-  const drives = lastDrives.drives;
-  const drive = drives[Number(btn.dataset.i)];
-  const lib = btn.dataset.j !== undefined ? drive.libraries[Number(btn.dataset.j)] : null;
-  const act = btn.dataset.act;
-  if (act === "open") { switchTab("convert"); state.pickers.src.set(lib); $("load-btn").focus(); }
-  else if (act === "a" || act === "b") { switchTab("sync"); state.pickers[act].set(lib); }
-  else if (act === "convert") { drivePanels[drive.path] = { target: btn.dataset.target }; rerenderDrives(); }
-  else if (act === "close") { delete drivePanels[drive.path]; rerenderDrives(); }
-  else if (act === "run") { runDriveConvert(drive, btn.closest(".panel")); }
-  else if (act === "restore") {
-    const mine = backupsCache.filter((b) => b.drive === drive.path || b.label === drive.label);
-    const backup = mine[Number(btn.dataset.k)];
-    if (!confirm(`Restore ${drive.label} to how it was at ${backup.created}? Library changes since then are undone.`)) return;
-    btn.disabled = true;
+function loadTab(tab) {
+  if (loading[tab.key]) return loading[tab.key];
+  const status = { set textContent(t) { if (state.active === tab.key) $("view-status").textContent = t; } };
+  const show = (text, error) => { if (state.active === tab.key) setStatus($("view-status"), text, error); };
+  show("Loading…");
+  loading[tab.key] = (async () => {
     try {
-      const { job_id } = await post("/api/backups/restore", { backup: backup.path, path: drive.path });
-      const result = await waitForJob(job_id, $("drives-status"));
-      $("drives-status").textContent = `Restored ${drive.label}: ${result.done.join(", ")}.`;
+      const { job_id } = await post("/api/inspect", readRequest(tab));
+      const lib = await waitForJob(job_id, status);
+      state.libs[tab.key] = lib;
+      const found = lib.access_rules.map(([from, to]) => `${from} → ${to}`).join(", ");
+      show(found ? `Music files found: ${found}.` : "");
+      if (state.active === tab.key) renderBrowser();
+      return lib;
     } catch (err) {
-      $("drives-status").textContent = `Restore failed: ${err.message}`;
+      show(err.message, true);
+      throw err;
+    } finally {
+      delete loading[tab.key];
     }
-  } else {
-    switchTab("convert");
-    $("dst-format").value = act === "rekordbox" ? "rekordbox_usb" : "serato";
-    if (act === "serato") {
-      document.querySelector("input[name=dst-mode][value=in_place]").checked = true;
-      $("dst-serato-root").value = drive.path;
-    }
-    $("dst-path").value = drive.path;
-    updateTarget();
-    $("target-card").classList.contains("hidden")
-      ? setStatus($("load-status"), `Target set to ${drive.label}. Load a source library first.`)
-      : $("target-card").scrollIntoView({ behavior: "smooth" });
-  }
+  })();
+  return loading[tab.key];
 }
 
-async function runDriveConvert(drive, panelEl) {
-  const panel = drivePanels[drive.path];
-  const opt = (name) => panelEl.querySelector(`[data-opt="${name}"]`);
-  const body = {
-    path: drive.path,
-    targets: [panel.target],
-    source_format: drive.libraries.map((l) => l.format).find((f) => f !== panel.target) || "",
-    keep_source: opt("keep").checked,
-    full_backup: opt("full").checked,
-    serato_write_tags: opt("tags") ? opt("tags").checked : true,
-    onelibrary: opt("onelibrary") ? opt("onelibrary").value : "auto",
-    xml_root: opt("xmlroot") ? opt("xmlroot").value.trim() : "",
-  };
-  panel.status = "Starting…";
-  panel.error = null;
-  rerenderDrives();
-  const statusEl = { set textContent(t) { panel.status = t; const el = document.querySelector(".panel .status"); if (el) el.textContent = t; } };
+const ensureLoaded = (tab) => (state.libs[tab.key] ? Promise.resolve(state.libs[tab.key]) : loadTab(tab));
+
+function backupsFor(drive) {
+  return state.backups.filter((b) => b.drive === drive.path || b.label === drive.label);
+}
+
+function renderHead() {
+  const tab = activeTab();
+  $("view").classList.toggle("hidden", !tab);
+  $("other-card").classList.toggle("hidden", state.active !== "other");
+  if (!tab) return;
+  const d = tab.drive;
+  $("view-title").textContent = tab.label;
+  $("view-sub").textContent = [tab.path, d ? `${d.fstype || "?"} · ${gb(d.free_bytes)} free of ${gb(d.total_bytes)}` : ""]
+    .filter(Boolean).join(" · ");
+  const buttons = [];
+  if (tab.format) buttons.push('<button type="button" data-act="export">Export to…</button>');
+  if (tab.format !== "rekordbox_xml") buttons.push('<button type="button" data-act="import">Import from…</button>');
+  if (d && tab.format in STICK_FORMATS) {
+    const other = Object.keys(STICK_FORMATS).find((f) => f !== tab.format);
+    buttons.push(`<button type="button" data-act="convert">Convert to ${STICK_FORMATS[other]}…</button>`);
+  }
+  if (tab.format) buttons.push('<button type="button" class="secondary" data-act="reload">Reload</button>');
+  $("view-actions").innerHTML = buttons.join(" ");
+  $("view-notes").innerHTML = (d ? d.notes : []).map((n) => `<div class="note">${escapeHtml(n)}</div>`).join("") +
+    (tab.format ? "" : '<p class="hint">No DJ library on this drive yet. Use “Import from…” to put one on it.</p>');
+  const backups = d ? backupsFor(d) : [];
+  $("view-backups").innerHTML = backups.length ? `<details><summary>${backups.length} backup(s) of this drive</summary><ul class="backups">${
+    backups.map((b, k) => `<li>${escapeHtml(b.created)} · ${b.full ? "whole drive" : "library folders"} · ${gb(b.size_bytes)}
+      <button type="button" class="chip" data-restore="${k}">Restore</button></li>`).join("")}</ul></details>` : "";
+}
+
+function renderBrowser() {
+  const tab = activeTab();
+  const lib = tab && state.libs[tab.key];
+  $("browser-pane").classList.toggle("hidden", !lib);
+  if (!lib) return;
+  const s = lib.summary;
+  $("stats").innerHTML = stat("tracks", s.tracks) + stat("playlists & crates", s.playlists) +
+    stat("hot cues", s.hot_cues) + stat("memory cues & loops", s.memory_cues) +
+    stat("with beat grid", s.gridded) + stat("files not found", s.missing_files);
+  const warnings = [...lib.warnings];
+  if (s.missing_files) {
+    warnings.push(`${s.missing_files} music file(s) aren't in any mounted folder, e.g. ${lib.missing_examples.slice(0, 2).join(", ")}.`);
+  }
+  $("lib-warnings").innerHTML = warnings.map((w) => `<li>${escapeHtml(w)}</li>`).join("");
+  $("tree").innerHTML = lib.playlists.length ? renderTree(lib.playlists) : '<p class="hint">No playlists.</p>';
+  showTracks("");
+}
+
+function renderTree(nodes) {
+  return "<ul>" + nodes.map((n) => {
+    if (n.children) {
+      return `<li><label><input type="checkbox" data-folder="${escapeHtml(n.path)}"> <span class="folder">${escapeHtml(n.name)}</span></label>${renderTree(n.children)}</li>`;
+    }
+    return `<li><input type="checkbox" data-path="${escapeHtml(n.path)}"> <span class="name" data-path="${escapeHtml(n.path)}">${escapeHtml(n.name)}</span> <span class="count">${n.count}${n.crate ? " · crate" : ""}</span></li>`;
+  }).join("") + "</ul>";
+}
+
+function collectSelection() {
+  state.selected = new Set([...$("tree").querySelectorAll("input[data-path]:checked")].map((b) => b.dataset.path));
+  renderWizard();
+}
+
+function selectAll(on) {
+  $("tree").querySelectorAll("input[type=checkbox]").forEach((b) => { b.checked = on; });
+  collectSelection();
+}
+
+async function showTracks(playlist) {
+  const lib = state.libs[state.active];
+  if (!lib) return;
+  state.currentPlaylist = playlist;
+  $("tracks-title").textContent = playlist || "All tracks";
+  $("track-detail").classList.add("hidden");
+  const q = $("track-search").value.trim();
+  let data;
   try {
-    const { job_id } = await post("/api/drives/convert", body);
-    panel.result = await waitForJob(job_id, statusEl);
-  } catch (err) {
-    panel.error = err.message;
-    panel.status = null;
+    data = await api(`/api/libraries/${lib.library_id}/tracks?playlist=${encodeURIComponent(playlist)}&q=${encodeURIComponent(q)}`);
+  } catch (_) {
+    // The server forgot the library (it restarted): read it again.
+    delete state.libs[state.active];
+    return void loadTab(activeTab()).catch(() => {});
   }
-  await refreshBackups();
-  rerenderDrives();
+  $("tracks").innerHTML = data.tracks.map((t) =>
+    `<tr data-id="${escapeHtml(t.id)}" title="${escapeHtml(t.location)}"><td>${escapeHtml(t.artist)}</td><td>${escapeHtml(t.title)}</td>
+     <td>${t.bpm || ""}</td><td>${t.hot_cues || ""}</td><td>${t.memory_cues || ""}</td><td>${t.grid || ""}</td></tr>`).join("");
+  $("tracks-more").textContent = data.total > data.tracks.length ? `Showing ${data.tracks.length} of ${data.total}.` : `${data.total} track(s).`;
 }
 
-function switchTab(name) {
-  document.querySelectorAll("[data-tab]").forEach((t) => t.setAttribute("aria-selected", String(t.dataset.tab === name)));
-  $("tab-convert").classList.toggle("hidden", name !== "convert");
-  $("tab-sync").classList.toggle("hidden", name !== "sync");
+async function showTrack(id) {
+  const lib = state.libs[state.active];
+  const t = await api(`/api/libraries/${lib.library_id}/tracks/${encodeURIComponent(id)}`);
+  const lines = [`${t.artist} - ${t.title}`, t.location, `BPM ${t.bpm}  key ${t.key || "-"}`];
+  if (t.grid.length) lines.push("Grid: " + t.grid.map((g) => `${(g.position_ms / 1000).toFixed(3)}s @ ${g.bpm.toFixed(2)} (beat ${g.beat})`).join(", "));
+  for (const c of [...t.cues].sort((a, b) => a.position_ms - b.position_ms)) {
+    const slot = c.slot === null ? "memory" : `hot ${String.fromCharCode(65 + c.slot)}`;
+    const end = c.end_ms !== null ? `–${(c.end_ms / 1000).toFixed(3)}s` : "";
+    const colour = c.colour !== null ? ` #${c.colour.toString(16).padStart(6, "0")}` : "";
+    lines.push(`  ${c.role.padEnd(6)} ${slot.padEnd(7)} ${(c.position_ms / 1000).toFixed(3)}s${end} ${c.name || ""}${colour}`);
+  }
+  $("track-detail").textContent = lines.join("\n");
+  $("track-detail").classList.remove("hidden");
 }
 
-// --- file browser -----------------------------------------------------------------------
+// --- export to / import from --------------------------------------------------------------
+
+// Where a library can be sent. `exists` means there is a library to merge into (with a preview);
+// otherwise a new one is written.
+function targetFor(tab, newFormat) {
+  if (!tab.format) {
+    return { id: `new:${newFormat}:${tab.path}`, format: newFormat, path: tab.path, exists: false,
+      label: `USB: ${tab.drive.label}, as a new ${STICK_FORMATS[newFormat]} stick`, hint: tab.path };
+  }
+  if (tab.format === "rekordbox_db") {
+    return { id: `xml:${tab.key}`, format: "rekordbox_xml", viaKey: tab.key, exists: false, label: "Rekordbox on this computer",
+      hint: "Makes an XML file that you then import inside Rekordbox. Rekordbox doesn't let other programs write to its library." };
+  }
+  return { id: tab.key, format: tab.format, path: tab.path, tabKey: tab.key, exists: true, label: tab.label, hint: tab.path };
+}
+
+function targetsFor(tab) {
+  const out = [];
+  for (const t of state.tabs) {
+    if (t.key !== tab.key && t.format && t.format !== "rekordbox_xml") out.push(targetFor(t));
+  }
+  for (const d of state.drives) {
+    if (tab.drive === d) continue;
+    for (const f of Object.keys(STICK_FORMATS)) {
+      if (!d.libraries.some((l) => l.format === f)) out.push(targetFor({ format: "", path: d.path, drive: d }, f));
+    }
+  }
+  out.push({ id: "xml", format: "rekordbox_xml", exists: false, label: "A Rekordbox XML file", hint: "Saved in the export folder, to import in Rekordbox on any computer." });
+  return out;
+}
+
+function wizardEnds() {
+  const w = state.wizard;
+  const tab = activeTab();
+  if (w.kind === "export") return { src: tab, dst: w.dst };
+  return { src: tabByKey(w.src), dst: targetFor(tab, $("wiz-newformat").value) };
+}
+
+function openWizard(kind) {
+  state.wizard = { kind, src: null, dst: null, previewed: false, busy: false, done: false };
+  $("wiz-report").innerHTML = "";
+  $("cv-report").innerHTML = "";
+  setStatus($("wiz-status"), "");
+  setStatus($("cv-status"), "");
+  renderWizard();
+  $(kind === "convert" ? "convert-panel" : "wizard").scrollIntoView({ behavior: "smooth", block: "nearest" });
+}
+
+function renderWizard() {
+  const w = state.wizard;
+  const tab = activeTab();
+  $("wizard").classList.toggle("hidden", !w || !tab || w.kind === "convert");
+  $("convert-panel").classList.toggle("hidden", !w || !tab || w.kind !== "convert");
+  if (!w || !tab) return;
+  if (w.kind === "convert") return renderConvertPanel();
+  const exporting = w.kind === "export";
+  $("wiz-title").textContent = exporting ? `Export from ${tab.label}` : `Import into ${tab.label}`;
+  $("wiz-pick-label").textContent = exporting ? "1. Where to?" : "1. Where from?";
+  w.choices = exporting ? targetsFor(tab)
+    : state.tabs.filter((t) => t.format && t.key !== tab.key).map((t) => ({ id: t.key, label: t.label, hint: t.path }));
+  const chosen = exporting ? (w.dst && w.dst.id) : w.src;
+  $("wiz-choices").innerHTML = w.choices.map((c) =>
+    `<button type="button" class="source" data-id="${escapeHtml(c.id)}" aria-pressed="${c.id === chosen}" ${w.busy || w.done ? "disabled" : ""}>
+      <b>${escapeHtml(c.label)}</b><span>${escapeHtml(c.hint || "")}</span></button>`).join("")
+    || '<p class="hint">No other library found. Plug in a stick, or open a library from the “Other…” tab.</p>';
+  $("wiz-format").classList.toggle("hidden", exporting || Boolean(tab.format));
+
+  const { src, dst } = wizardEnds();
+  const ready = Boolean(src && dst);
+  const merging = ready && dst.exists;
+  const both = merging && $("wiz-both").checked;
+  if (!exporting) {
+    $("wiz-what").textContent = "The whole library. To bring over only some playlists, open that library's tab and use “Export to…”.";
+  } else if (both) {
+    $("wiz-what").textContent = "The whole library, both ways.";
+  } else if (state.selected.size) {
+    $("wiz-what").textContent = `${state.selected.size} ticked playlist(s) and the tracks in them.`;
+  } else {
+    $("wiz-what").textContent = "The whole library. Tick playlists in the list below to send only those.";
+  }
+  $("wiz-how").textContent = !ready ? ""
+    : merging ? `Tracks, cues, grids and playlists are merged into ${dst.label}. Every file changed is backed up first.`
+    : dst.format === "rekordbox_xml" ? (dst.hint || "")
+    : `A new ${STICK_FORMATS[dst.format]} library is written onto the drive, and the music is copied onto it.`;
+  $("wiz-sync-opts").classList.toggle("hidden", !merging);
+  $("wiz-preview").classList.toggle("hidden", !merging || w.done);
+  $("wiz-preview").disabled = !ready || w.busy;
+  $("wiz-run").classList.toggle("hidden", w.done);
+  $("wiz-run").disabled = !ready || w.busy || (merging && !w.previewed);
+  $("wiz-run").textContent = merging ? "4. Apply these changes"
+    : dst && dst.format === "rekordbox_xml" ? "3. Make the XML file" : "3. Write to the stick";
+  $("wiz-cancel").textContent = w.done ? "Close" : "Cancel";
+}
+
+function writeOptions() {
+  return {
+    mp3_decoder: $("set-mp3").value,
+    serato_write_tags: $("wiz-serato-tags").checked,
+    waveforms: $("wiz-waveforms").checked,
+    onelibrary: $("wiz-onelibrary").value,
+  };
+}
+
+function syncReport(result, srcLabel, dstLabel) {
+  const parts = [];
+  for (const [key, label] of [["a_to_b", `${srcLabel} → ${dstLabel}`], ["b_to_a", `${dstLabel} → ${srcLabel}`]]) {
+    const side = result[key];
+    if (!side) continue;
+    const r = side.report;
+    const by = Object.entries(r.matched_by).map(([k, v]) => `${v} by ${k}`).join(", ");
+    const will = result.dry_run ? "to " : "";
+    parts.push(`<h4>${escapeHtml(label)}</h4><div class="stats">${stat("tracks already there", r.matched)}${stat(`tracks ${will}add`, r.added)}` +
+      `${stat(`tracks ${will}update`, r.updated)}${stat("new playlists", r.playlists_added)}` +
+      `${stat("changed playlists", r.playlists_updated)}</div>` +
+      (by ? `<p class="hint">Matched ${escapeHtml(by)}.</p>` : "") +
+      (r.details.length ? `<details><summary>${r.details.length} change(s)</summary><ul>${r.details.map((d) => `<li>${escapeHtml(d)}</li>`).join("")}</ul></details>` : "") +
+      (side.written ? warningList(side.written.warnings) : ""));
+  }
+  return parts.join("");
+}
+
+function convertReport(result) {
+  const s = result.summary;
+  const files = result.files.map((f) => f.download
+    ? `<a href="/api/download?path=${encodeURIComponent(f.download)}">${escapeHtml(f.download)}</a>`
+    : `<code>${escapeHtml(f.path)}</code>`).join(" ");
+  return `<div class="stats">${stat("tracks", s.tracks)}${stat("playlists", s.playlists)}${stat("hot cues", s.hot_cues)}` +
+    `${stat("memory cues & loops", s.memory_cues)}${stat("with beat grid", s.gridded)}</div>` +
+    `<p>Written to <code>${escapeHtml(result.output_dir)}</code>:</p><div class="files">${files}</div>` +
+    warningList(result.warnings) + (NEXT_STEPS[result.format] || "");
+}
+
+async function convertFrom(src, body, status) {
+  for (let attempt = 0; ; attempt++) {
+    const lib = await ensureLoaded(src);
+    try {
+      const { job_id } = await post("/api/convert", { ...body, library_id: lib.library_id });
+      return await waitForJob(job_id, status);
+    } catch (err) {
+      // The server forgot the library (it restarted): read it again, once.
+      if (attempt || !/load it again/.test(err.message)) throw err;
+      delete state.libs[src.key];
+    }
+  }
+}
+
+async function transfer(dryRun) {
+  const w = state.wizard;
+  const { src, dst } = wizardEnds();
+  const status = $("wiz-status");
+  const playlists = w.kind === "export" ? [...state.selected] : [];
+  if (!dryRun && dst.format !== "rekordbox_xml" &&
+      !confirm(`This changes ${dst.label}. Is the DJ software that uses it closed?`)) return;
+  w.busy = true;
+  renderWizard();
+  setStatus(status, dryRun ? "Comparing…" : "Working…");
+  try {
+    const changed = [];
+    if (dst.exists) {
+      const both = $("wiz-both").checked;
+      const { job_id } = await post("/api/sync", {
+        a: readRequest(src), b: readRequest(tabByKey(dst.tabKey)),
+        direction: both ? "both" : "a_to_b",
+        only_playlists: both ? [] : playlists,
+        cues: $("wiz-cues").value, grids: $("wiz-grids").value,
+        metadata: $("wiz-metadata").value, playlists: $("wiz-playlists").value,
+        add_tracks: $("wiz-add").checked,
+        dry_run: dryRun,
+        write: { format: "mixxx", ...writeOptions() },
+      });
+      const result = await waitForJob(job_id, status);
+      $("wiz-report").innerHTML = syncReport(result, src.label, dst.label);
+      if (dryRun) w.previewed = true;
+      else changed.push(dst.tabKey, ...(both ? [src.key] : []));
+    } else {
+      let rules = "";
+      if (dst.viaKey) {
+        // Write the paths as that Rekordbox sees them (e.g. C:/... under Wine).
+        const via = await ensureLoaded(tabByKey(dst.viaKey));
+        rules = via.access_rules.map(([from, to]) => `${to} => ${from}`).join("\n");
+      }
+      const result = await convertFrom(src, {
+        ...writeOptions(), format: dst.format, playlists, path_rules: rules,
+        in_place: dst.format !== "rekordbox_xml", target_path: dst.path || "",
+        output_name: `rekordbox xml from ${src.label}`.replace(/[^\w -]/g, ""),
+        serato_root: dst.format === "serato" ? dst.path : "/",
+      }, status);
+      $("wiz-report").innerHTML = convertReport(result);
+    }
+    if (dryRun) {
+      setStatus(status, "Preview ready. Nothing has been changed yet.");
+    } else {
+      w.done = true;
+      setStatus(status, "Done.");
+      for (const key of changed) delete state.libs[key];
+      await refresh();
+    }
+  } catch (err) {
+    setStatus(status, err.message, true);
+  } finally {
+    w.busy = false;
+    renderWizard();
+  }
+}
+
+// --- convert a stick to the other format ---------------------------------------------------
+
+function renderConvertPanel() {
+  const w = state.wizard;
+  const tab = activeTab();
+  const d = tab.drive;
+  const target = Object.keys(STICK_FORMATS).find((f) => f !== tab.format);
+  const name = STICK_FORMATS[target];
+  const source = STICK_FORMATS[tab.format];
+  w.target = target;
+  $("cv-title").textContent = `Convert ${d.label} from ${source} to ${name}`;
+  $("cv-hint").textContent = `A ${name} library is written onto this drive, using the music already on it. The drive is backed up first. Nothing on the computer changes.`;
+  $("cv-keep-label").textContent = `Keep the ${source} library too (the drive then works in both)`;
+  $("cv-full-label").textContent = `Back up the whole drive (${gb(d.total_bytes - d.free_bytes)}), not just the library folders`;
+  $("cv-tags-row").classList.toggle("hidden", target !== "serato");
+  $("cv-rekordbox").classList.toggle("hidden", target !== "rekordbox_usb");
+  $("cv-xmlroot").placeholder = `${d.path} — or E:/ on Windows, /Volumes/${d.label} on a Mac`;
+  $("cv-run").classList.toggle("hidden", w.done);
+  $("cv-run").disabled = w.busy;
+  $("cv-cancel").textContent = w.done ? "Close" : "Cancel";
+}
+
+async function runDriveConvert() {
+  const w = state.wizard;
+  const tab = activeTab();
+  const status = $("cv-status");
+  w.busy = true;
+  renderWizard();
+  setStatus(status, "Starting…");
+  try {
+    const { job_id } = await post("/api/drives/convert", {
+      path: tab.drive.path,
+      targets: [w.target],
+      source_format: tab.format,
+      keep_source: $("cv-keep").checked,
+      full_backup: $("cv-full").checked,
+      serato_write_tags: $("cv-tags").checked,
+      onelibrary: $("cv-onelibrary").value,
+      xml_root: $("cv-xmlroot").value.trim(),
+    });
+    const r = await waitForJob(job_id, status);
+    $("cv-report").innerHTML = `<p><b>Converted to ${escapeHtml(STICK_FORMATS[w.target])}.</b> Backup: <code>${escapeHtml(r.backup)}</code>` +
+      (r.removed.length ? `<br>Removed the old ${escapeHtml(r.removed.join(", "))} library.` : "") + "</p>" + warningList(r.warnings);
+    w.done = true;
+    setStatus(status, "Done.");
+    await refresh();
+  } catch (err) {
+    setStatus(status, err.message, true);
+  } finally {
+    w.busy = false;
+    renderWizard();
+  }
+}
+
+async function restoreBackup(index) {
+  const drive = activeTab().drive;
+  const backup = backupsFor(drive)[index];
+  if (!confirm(`Restore ${drive.label} to how it was at ${backup.created}? Library changes since then are undone.`)) return;
+  const status = $("view-status");
+  try {
+    const { job_id } = await post("/api/backups/restore", { backup: backup.path, path: drive.path });
+    const result = await waitForJob(job_id, status);
+    setStatus(status, `Restored ${drive.label}: ${result.done.join(", ")}.`);
+    for (const t of state.tabs) if (t.drive === drive) delete state.libs[t.key];
+    await refresh();
+  } catch (err) {
+    setStatus(status, `Restore failed: ${err.message}`, true);
+  }
+}
+
+// --- opening a library that wasn't found automatically -------------------------------------
 
 async function openBrowser(input) {
   const dialog = $("browser");
@@ -406,257 +590,113 @@ async function openBrowser(input) {
     }
   };
   $("browser-pick").onclick = () => { if (current) { input.value = current; dialog.close(); } };
-  const start = input.value;
-  const startDir = start && !/\.(xml|sqlite|db|pdb)$|database V2$/.test(start) ? start : start.replace(/\/[^/]*$/, "");
-  await show(startDir || "");
+  await show(input.value.trim());
   dialog.showModal();
+}
+
+async function openOther(path) {
+  const status = $("other-status");
+  if (!path) return setStatus(status, "Choose a folder or file first.", true);
+  setStatus(status, "Looking…");
+  try {
+    const { job_id } = await post("/api/inspect", { path, mp3_decoder: $("set-mp3").value });
+    const lib = await waitForJob(job_id, status);
+    const entry = { format: lib.format, path: lib.path };
+    const key = `${entry.format}:${entry.path}`;
+    if (!state.sources.concat(state.extra).some((s) => `${s.format}:${s.path}` === key)) state.extra.push(entry);
+    state.libs[key] = lib;
+    state.tabs = buildTabs();
+    setStatus(status, "");
+    selectTab(key);
+  } catch (err) {
+    setStatus(status, err.message, true);
+  }
 }
 
 async function uploadFile() {
   const file = $("upload").files[0];
   if (!file) return;
-  const status = $("load-status");
+  const status = $("other-status");
   setStatus(status, `Uploading ${file.name}…`);
   const form = new FormData();
   form.append("file", file);
   try {
     const result = await api("/api/upload", { method: "POST", body: form });
-    const format = /\.xml$/i.test(file.name) ? "rekordbox_xml" : /\.sqlite$/i.test(file.name) ? "mixxx" : "serato";
-    state.pickers.src.set({ format, path: result.path });
-    setStatus(status, `Uploaded ${file.name}.`);
+    await openOther(result.path);
   } catch (err) {
     setStatus(status, `Upload failed: ${err.message}`, true);
   }
 }
 
-// --- load -------------------------------------------------------------------------------
+// --- setup ------------------------------------------------------------------------------
 
-async function loadLibrary() {
-  const status = $("load-status");
-  const button = $("load-btn");
-  button.disabled = true;
-  setStatus(status, "Loading…");
-  try {
-    const { job_id } = await post("/api/inspect", state.pickers.src.value());
-    const result = await waitForJob(job_id, status);
-    state.library = result;
-    setStatus(status, `Loaded ${result.source}.`);
-    renderLibrary(result);
-  } catch (err) {
-    setStatus(status, err.message, true);
-  } finally {
-    button.disabled = false;
-  }
-}
+async function init() {
+  $("tabs").addEventListener("click", (e) => {
+    const tab = e.target.closest("[data-key]");
+    if (tab) selectTab(tab.dataset.key);
+  });
+  $("view-actions").addEventListener("click", (e) => {
+    const act = e.target.closest("[data-act]");
+    if (!act) return;
+    if (act.dataset.act === "reload") {
+      delete state.libs[state.active];
+      loadTab(activeTab()).catch(() => {});
+    } else {
+      openWizard(act.dataset.act);
+    }
+  });
+  $("view-backups").addEventListener("click", (e) => {
+    const btn = e.target.closest("[data-restore]");
+    if (btn) restoreBackup(Number(btn.dataset.restore));
+  });
+  $("wiz-choices").addEventListener("click", (e) => {
+    const btn = e.target.closest(".source");
+    const w = state.wizard;
+    if (!btn || !w) return;
+    if (w.kind === "export") w.dst = w.choices.find((c) => c.id === btn.dataset.id);
+    else w.src = btn.dataset.id;
+    w.previewed = false;
+    $("wiz-report").innerHTML = "";
+    setStatus($("wiz-status"), "");
+    if (w.kind === "export" && w.dst.format === "serato") $("wiz-serato-tags").checked = !w.dst.exists || Boolean(tabByKey(w.dst.tabKey).drive);
+    renderWizard();
+  });
+  for (const id of ["wiz-both", "wiz-newformat"]) $(id).addEventListener("change", renderWizard);
+  $("wiz-preview").addEventListener("click", () => transfer(true));
+  $("wiz-run").addEventListener("click", () => transfer(false));
+  const close = () => { state.wizard = null; renderWizard(); };
+  $("wiz-cancel").addEventListener("click", close);
+  $("cv-cancel").addEventListener("click", close);
+  $("cv-run").addEventListener("click", runDriveConvert);
 
-function renderLibrary(lib) {
-  const s = lib.summary;
-  $("stats").innerHTML = stat("tracks", s.tracks) + stat("playlists & crates", s.playlists) +
-    stat("hot cues", s.hot_cues) + stat("memory cues & loops", s.memory_cues) +
-    stat("with beat grid", s.gridded) + stat("files not found", s.missing_files);
-  const warnings = [...lib.warnings];
-  if (s.missing_files) {
-    warnings.push(`${s.missing_files} file(s) not found here, e.g. ${lib.missing_examples.join(", ")}. ` +
-      "Mount the music folder or add a file access rule.");
-  }
-  $("lib-warnings").innerHTML = warnings.map((w) => `<li>${escapeHtml(w)}</li>`).join("");
-  state.selected = new Set();
-  $("tree").innerHTML = lib.playlists.length ? renderTree(lib.playlists) : '<p class="hint">No playlists.</p>';
-  $("tree").onclick = (e) => {
+  $("tree").addEventListener("click", (e) => {
     const name = e.target.closest(".name");
     if (name) showTracks(name.dataset.path);
-  };
-  $("tree").onchange = (e) => {
+  });
+  $("tree").addEventListener("change", (e) => {
     const box = e.target;
     if (box.type !== "checkbox") return;
     box.closest("li").querySelectorAll("input[type=checkbox]").forEach((b) => { b.checked = box.checked; });
     collectSelection();
-  };
-  $("folders").innerHTML = lib.folders.map((f) =>
-    `<button type="button" class="chip" data-folder="${escapeHtml(f.folder)}">${escapeHtml(f.folder)} (${f.tracks})</button>`).join("");
-  $("library-card").classList.remove("hidden");
-  $("target-card").classList.remove("hidden");
-  $("result-card").classList.add("hidden");
-  showTracks("");
-}
-
-function renderTree(nodes) {
-  return "<ul>" + nodes.map((n) => {
-    if (n.children) {
-      return `<li><label><input type="checkbox" data-folder="${escapeHtml(n.path)}"> <span class="folder">${escapeHtml(n.name)}</span></label>${renderTree(n.children)}</li>`;
-    }
-    return `<li><input type="checkbox" data-path="${escapeHtml(n.path)}"> <span class="name" data-path="${escapeHtml(n.path)}">${escapeHtml(n.name)}</span> <span class="count">${n.count}${n.crate ? " · crate" : ""}</span></li>`;
-  }).join("") + "</ul>";
-}
-
-function collectSelection() {
-  state.selected = new Set([...$("tree").querySelectorAll("input[data-path]:checked")].map((b) => b.dataset.path));
-}
-
-function selectAll(on) {
-  $("tree").querySelectorAll("input[type=checkbox]").forEach((b) => { b.checked = on; });
-  collectSelection();
-}
-
-async function showTracks(playlist) {
-  state.currentPlaylist = playlist;
-  $("tracks-title").textContent = playlist || "All tracks";
-  $("track-detail").classList.add("hidden");
-  const q = $("track-search").value.trim();
-  const data = await api(`/api/libraries/${state.library.library_id}/tracks?playlist=${encodeURIComponent(playlist)}&q=${encodeURIComponent(q)}`);
-  $("tracks").innerHTML = data.tracks.map((t) =>
-    `<tr data-id="${escapeHtml(t.id)}" title="${escapeHtml(t.location)}"><td>${escapeHtml(t.artist)}</td><td>${escapeHtml(t.title)}</td>
-     <td>${t.bpm || ""}</td><td>${t.hot_cues || ""}</td><td>${t.memory_cues || ""}</td><td>${t.grid || ""}</td></tr>`).join("");
-  $("tracks-more").textContent = data.total > data.tracks.length ? `Showing ${data.tracks.length} of ${data.total}.` : `${data.total} track(s).`;
-  $("tracks").onclick = async (e) => {
+  });
+  $("tracks").addEventListener("click", (e) => {
     const row = e.target.closest("tr[data-id]");
-    if (!row) return;
-    const track = await api(`/api/libraries/${state.library.library_id}/tracks/${encodeURIComponent(row.dataset.id)}`);
-    const pane = $("track-detail");
-    pane.textContent = formatTrack(track);
-    pane.classList.remove("hidden");
-  };
+    if (row) showTrack(row.dataset.id);
+  });
+  $("select-all").addEventListener("click", (e) => { e.preventDefault(); selectAll(true); });
+  $("select-none").addEventListener("click", (e) => { e.preventDefault(); selectAll(false); });
+  let searchTimer;
+  $("track-search").addEventListener("input", () => {
+    clearTimeout(searchTimer);
+    searchTimer = setTimeout(() => showTracks(state.currentPlaylist), 250);
+  });
+
+  $("other-browse").addEventListener("click", () => openBrowser($("other-path")));
+  $("other-open").addEventListener("click", () => openOther($("other-path").value.trim()));
+  $("upload").addEventListener("change", uploadFile);
+
+  await refresh();
+  watchDrives();
 }
 
-function formatTrack(t) {
-  const lines = [`${t.artist} - ${t.title}`, t.location, `BPM ${t.bpm}  key ${t.key || "-"}`];
-  if (t.grid.length) lines.push("Grid: " + t.grid.map((g) => `${(g.position_ms / 1000).toFixed(3)}s @ ${g.bpm.toFixed(2)} (beat ${g.beat})`).join(", "));
-  for (const c of [...t.cues].sort((a, b) => a.position_ms - b.position_ms)) {
-    const slot = c.slot === null ? "memory" : `hot ${String.fromCharCode(65 + c.slot)}`;
-    const end = c.end_ms !== null ? `–${(c.end_ms / 1000).toFixed(3)}s` : "";
-    const colour = c.colour !== null ? ` #${c.colour.toString(16).padStart(6, "0")}` : "";
-    lines.push(`  ${c.role.padEnd(6)} ${slot.padEnd(7)} ${(c.position_ms / 1000).toFixed(3)}s${end} ${c.name || ""}${colour}`);
-  }
-  return lines.join("\n");
-}
-
-// --- convert ----------------------------------------------------------------------------
-
-function writeOptions(format) {
-  return {
-    format,
-    key_notation: $("dst-key").value,
-    mp3_decoder: format === "mixxx" ? $("dst-mp3").value : state.pickers.src.value().mp3_decoder,
-    memory_cues_to_hot_cues: $("dst-mem-to-hot").checked,
-    rekordbox_memory_cues: $("dst-rb-memory").checked,
-    rekordbox_hot_cues_as_memory: $("dst-rb-hot-as-memory").checked,
-    serato_root: $("dst-serato-root").value.trim() || "/",
-    serato_write_tags: $("dst-serato-tags").checked,
-    serato_max_hot_cues: Number($("dst-serato-cues").value),
-    serato_base_database: $("dst-serato-base").value.trim(),
-    mixxx_base_database: $("dst-mixxx-base").value.trim(),
-    mixxx_playlists_as_crates: $("dst-mixxx-crates").checked,
-    copy_missing: format === "serato" ? $("dst-serato-copy").checked : $("dst-copy").checked,
-    waveforms: $("dst-waveforms").checked,
-    device_name: $("dst-device").value.trim(),
-    onelibrary: $("dst-onelibrary").value,
-    usb_xml_root: $("dst-xml-root").value.trim(),
-  };
-}
-
-async function convert() {
-  const status = $("convert-status");
-  const button = $("convert-btn");
-  const format = $("dst-format").value;
-  const mode = targetMode();
-  if (format === "serato" && $("dst-serato-tags").checked &&
-      !confirm("This writes Serato cue and grid tags into your audio files. Continue?")) return;
-  if (mode === "in_place" && format !== "rekordbox_usb" &&
-      !confirm("This updates the library in place (a backup is made first). Is the DJ software closed?")) return;
-  button.disabled = true;
-  setStatus(status, "Converting…");
-  try {
-    const { job_id } = await post("/api/convert", {
-      ...writeOptions(format),
-      library_id: state.library.library_id,
-      output_name: $("dst-name").value.trim() || "converted",
-      path_rules: $("path-rules").value,
-      in_place: mode === "in_place",
-      target_path: $("dst-path").value.trim(),
-      playlists: [...state.selected],
-    });
-    const result = await waitForJob(job_id, status);
-    setStatus(status, "Done.");
-    renderResult(result);
-  } catch (err) {
-    setStatus(status, err.message, true);
-  } finally {
-    button.disabled = false;
-  }
-}
-
-function renderResult(result) {
-  const s = result.summary;
-  $("result-stats").innerHTML = stat("tracks", s.tracks) + stat("playlists", s.playlists) +
-    stat("hot cues", s.hot_cues) + stat("memory cues & loops", s.memory_cues) + stat("with beat grid", s.gridded);
-  const files = result.files.map((f) => f.download
-    ? `<a href="/api/download?path=${encodeURIComponent(f.download)}">${escapeHtml(f.download)}</a>`
-    : `<code>${escapeHtml(f.path)}</code>`).join(" ");
-  const zip = result.zip ? `<a href="/api/download?path=${encodeURIComponent(result.zip)}"><b>Download all (.zip)</b></a>` : "";
-  $("result-files").innerHTML = `<p>Written to <code>${escapeHtml(result.output_dir)}</code>:</p><div class="files">${files} ${zip}</div>`;
-  $("result-warnings").innerHTML = result.warnings.map((w) => `<li>${escapeHtml(w)}</li>`).join("");
-  $("next-steps").innerHTML = NEXT_STEPS[result.format] || "";
-  $("result-card").classList.remove("hidden");
-  $("result-card").scrollIntoView({ behavior: "smooth" });
-}
-
-// --- sync -------------------------------------------------------------------------------
-
-async function runSync(dryRun) {
-  const status = $("sync-status");
-  const a = state.pickers.a.value();
-  const b = state.pickers.b.value();
-  if (!a.path || !b.path) { setStatus(status, "Choose both libraries.", true); return; }
-  if (!dryRun && !confirm("Sync updates the libraries in place (each changed file is backed up first). Is the DJ software closed?")) return;
-  for (const btn of [$("sync-preview"), $("sync-run")]) btn.disabled = true;
-  setStatus(status, dryRun ? "Comparing…" : "Syncing…");
-  try {
-    const { job_id } = await post("/api/sync", {
-      a, b,
-      direction: $("sync-direction").value,
-      prefer: $("sync-prefer").value,
-      cues: $("sync-cues").value,
-      grids: $("sync-grids").value,
-      metadata: $("sync-metadata").value,
-      playlists: $("sync-playlists").value,
-      add_tracks: $("sync-add").checked,
-      path_rules: $("sync-rules").value,
-      dry_run: dryRun,
-      write: {
-        format: "mixxx",
-        serato_write_tags: $("sync-serato-tags").checked,
-        waveforms: $("sync-waveforms").checked,
-        onelibrary: $("sync-onelibrary").value,
-      },
-    });
-    const result = await waitForJob(job_id, status);
-    setStatus(status, dryRun ? "Preview ready — nothing was changed." : "Done.");
-    renderSync(result);
-  } catch (err) {
-    setStatus(status, err.message, true);
-  } finally {
-    for (const btn of [$("sync-preview"), $("sync-run")]) btn.disabled = false;
-  }
-}
-
-function renderSync(result) {
-  const parts = [];
-  for (const [key, label] of [["a_to_b", "A → B"], ["b_to_a", "B → A"]]) {
-    const side = result[key];
-    if (!side) continue;
-    const r = side.report;
-    const by = Object.entries(r.matched_by).map(([k, v]) => `${v} by ${k}`).join(", ");
-    parts.push(`<h3>${label}</h3><div class="stats">${stat("matched", r.matched)}${stat(result.dry_run ? "would add" : "added", r.added)}` +
-      `${stat(result.dry_run ? "would update" : "updated", r.updated)}${stat("new playlists", r.playlists_added)}` +
-      `${stat("changed playlists", r.playlists_updated)}</div>` +
-      (by ? `<p class="hint">Matched ${escapeHtml(by)}.</p>` : "") +
-      (r.details.length ? `<details><summary>${r.details.length} change(s)</summary><ul>${r.details.map((d) => `<li>${escapeHtml(d)}</li>`).join("")}</ul></details>` : "") +
-      (side.written ? `<ul class="warnings">${side.written.warnings.map((w) => `<li>${escapeHtml(w)}</li>`).join("")}</ul>` : ""));
-  }
-  $("sync-result-title").textContent = result.dry_run ? "Preview" : "Result";
-  $("sync-report").innerHTML = parts.join("");
-  $("sync-result").classList.remove("hidden");
-  $("sync-result").scrollIntoView({ behavior: "smooth" });
-}
-
-init().catch((err) => setStatus($("load-status"), `Could not start: ${err.message}`, true));
+init().catch((err) => { document.querySelector("main").insertAdjacentHTML("afterbegin", `<p class="status error">Could not start: ${escapeHtml(err.message)}</p>`); });

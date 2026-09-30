@@ -43,6 +43,7 @@ from ..convert import (
     sync_libraries,
     write_library,
 )
+from ..detect import REMOVABLE, detect_libraries, is_rekordbox_xml
 from ..devices import list_drives, usb_roots
 from ..drive_convert import DriveConvertOptions, convert_drive, list_backups, restore_drive
 from ..keys import KeyNotation, format_key
@@ -135,9 +136,6 @@ def info() -> dict[str, Any]:
     }
 
 
-REMOVABLE = ("/media/", "/mnt/", "/Volumes/", "/run/media/")
-
-
 def _is_removable(path: Path) -> bool:
     return str(path).startswith(REMOVABLE)
 
@@ -177,13 +175,19 @@ def _suggest_sources() -> list[dict[str, str]]:
                         # A _Serato_ at a drive's root stores paths relative to that drive.
                         drive = folder.parent if folder.name == "_Serato_" else folder
                         entry["serato_root"] = str(drive) if _is_removable(drive) else "/"
-                    elif fmt == "rekordbox_xml" and not _is_rekordbox_xml(match):
+                    elif fmt == "rekordbox_xml" and not is_rekordbox_xml(match):
                         continue
                     if entry not in found:
                         found.append(entry)
             except OSError:
                 continue
     return found
+
+
+@app.get("/api/sources")
+def sources() -> dict[str, Any]:
+    """Libraries found in the mounted folders and on drives. The UI lists these to pick from."""
+    return {"sources": _suggest_sources()}
 
 
 @app.get("/api/drives")
@@ -258,14 +262,6 @@ def restore(request: RestoreRequest) -> dict[str, str]:
     return {"job_id": _start("restore", work).id}
 
 
-def _is_rekordbox_xml(path: Path) -> bool:
-    try:
-        with open(path, "rb") as f:
-            return b"DJ_PLAYLISTS" in f.read(2048)
-    except OSError:
-        return False
-
-
 def _allowed(path: Path) -> bool:
     resolved = path.resolve()
     return any(
@@ -326,7 +322,7 @@ async def upload(file: UploadFile) -> dict[str, str]:
 
 
 class ReadRequest(BaseModel):
-    format: str
+    format: str = ""  # empty: work it out from what's at the path
     path: str
     access_rules: str = ""
     mp3_decoder: str = "MAD"
@@ -373,6 +369,7 @@ class SyncRequest(BaseModel):
     playlists: str = "merge"
     add_tracks: bool = True
     path_rules: str = ""  # A paths => B paths
+    only_playlists: list[str] = []  # send only these of A's playlists to B; empty: all
     dry_run: bool = True
     write: WriteRequest | None = None  # format options for the written side(s)
 
@@ -439,6 +436,9 @@ def inspect(request: ReadRequest) -> dict[str, str]:
             "playlists": _tree(library.playlists),
             "folders": _common_folders(tracks),
             "missing_examples": [t.location for t in missing[:5]],
+            "format": options.format,
+            "path": options.path,
+            "access_rules": [list(rule) for rule in options.access_rules],
             "warnings": library.warnings,
         }
 
@@ -485,16 +485,34 @@ def _safe_output(name: str) -> Path:
 
 
 def _read_options(request: ReadRequest) -> ReadOptions:
-    if request.format not in FORMATS:
-        raise HTTPException(400, f"unknown format {request.format!r}")
+    fmt, path, serato_root = request.format, request.path, request.serato_root or "/"
+    if not fmt:
+        found = detect_libraries(Path(path))
+        if not found:
+            raise HTTPException(
+                400, f"No Mixxx, Rekordbox or Serato library found at {path or '(no path)'}"
+            )
+        fmt, path = found[0]["format"], found[0]["path"]
+        if serato_root == "/":
+            serato_root = found[0].get("serato_root", "/")
+    if fmt not in FORMATS:
+        raise HTTPException(400, f"unknown format {fmt!r}")
     return ReadOptions(
-        format=request.format,  # type: ignore[arg-type]
-        path=request.path,
+        format=fmt,  # type: ignore[arg-type]
+        path=path,
         access_rules=parse_rules(request.access_rules),
         mp3_decoder=request.mp3_decoder,  # type: ignore[arg-type]
-        serato_root=request.serato_root or "/",
+        serato_root=serato_root,
         read_file_tags=request.read_file_tags,
+        music_roots=_music_roots(),
     )
+
+
+def _music_roots() -> list[str]:
+    """Where the music might be: the mounted folders and any drives plugged in."""
+    roots = [str(r) for r in BROWSE_ROOTS if r.is_dir()]
+    roots += [d.path for d in list_drives() if d.path not in roots]
+    return roots
 
 
 def _write_options(request: WriteRequest, output: Path) -> WriteOptions:
@@ -601,7 +619,13 @@ def sync(request: SyncRequest) -> dict[str, str]:
 
     def work(job: Job, progress: Any) -> dict[str, Any]:
         result = sync_libraries(
-            side(a), side(b), request.direction, options, request.dry_run, progress
+            side(a),
+            side(b),
+            request.direction,
+            options,
+            request.dry_run,
+            progress,
+            request.only_playlists,
         )  # type: ignore[arg-type]
         return result.as_dict() | {"dry_run": request.dry_run}
 
