@@ -71,14 +71,22 @@ def _mounts(mounts_file: Path) -> list[tuple[str, Path, str]]:
     return result
 
 
+def _is_file(path: Path) -> bool:
+    # is_file() raises on folders we may not enter (e.g. /media/<another user>).
+    try:
+        return path.is_file()
+    except OSError:
+        return False
+
+
 def _libraries(path: Path) -> list[dict[str, str]]:
     found = []
     for folder in ("PIONEER", ".PIONEER"):
         rekordbox = path / folder / "rekordbox"
-        if (rekordbox / "export.pdb").is_file() or (rekordbox / "exportLibrary.db").is_file():
+        if _is_file(rekordbox / "export.pdb") or _is_file(rekordbox / "exportLibrary.db"):
             found.append({"format": "rekordbox_usb", "path": str(path)})
             break
-    if (path / "_Serato_" / "database V2").is_file():
+    if _is_file(path / "_Serato_" / "database V2"):
         found.append({"format": "serato", "path": str(path / "_Serato_"), "serato_root": str(path)})
     return found
 

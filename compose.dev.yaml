@@ -1,0 +1,18 @@
+# Live reload for development:
+#   docker compose -f compose.yaml -f compose.dev.yaml up --build
+#
+# Mounts ./src over the installed package and restarts the server when a file changes.
+# Rebuild only when dependencies (pyproject.toml, uv.lock) or the Dockerfile change.
+services:
+  dj-library-converter:
+    volumes:
+      - "./src/djconvert:/app/.venv/lib/python3.13/site-packages/djconvert:ro"
+    environment:
+      PYTHONDONTWRITEBYTECODE: "1"
+    entrypoint: ["uvicorn"]
+    command:
+      - "djconvert.web.server:app"
+      - "--host=0.0.0.0"
+      - "--port=8000"
+      - "--reload"
+      - "--reload-dir=/app/.venv/lib/python3.13/site-packages/djconvert"
