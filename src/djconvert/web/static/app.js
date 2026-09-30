@@ -97,12 +97,18 @@ function buildTabs() {
   return tabs.sort((a, b) => Boolean(a.drive) - Boolean(b.drive));
 }
 
+const ICON = (paths) => `<svg class="icon" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${paths}</svg>`;
+const ICONS = {
+  database: ICON('<ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v14c0 1.7 3.6 3 8 3s8-1.3 8-3V5"/><path d="M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3"/>'),
+  usb: ICON('<rect x="6" y="9" width="12" height="13" rx="2"/><path d="M8 9V2h8v7"/><path d="M11 5v1M13 5v1"/>'),
+};
+
 const tabByKey = (key) => state.tabs.find((t) => t.key === key);
 const activeTab = () => tabByKey(state.active);
 
 function renderTabs() {
   $("tabs").innerHTML = state.tabs.map((t) =>
-    `<button type="button" role="tab" data-key="${escapeHtml(t.key)}" aria-selected="${t.key === state.active}">${escapeHtml(t.label)}</button>`).join("") +
+    `<button type="button" role="tab" class="${t.drive ? "usb" : "local"}" data-key="${escapeHtml(t.key)}" aria-selected="${t.key === state.active}">${t.drive ? ICONS.usb : ICONS.database}${escapeHtml(t.label.replace(/^USB: /, ""))}</button>`).join("") +
     `<button type="button" role="tab" data-key="other" aria-selected="${state.active === "other"}">Other…</button>`;
 }
 

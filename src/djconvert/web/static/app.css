@@ -11,6 +11,8 @@
   --ok: #1d7a46;
   --err: #b42318;
   --row-hover: #f0f3fb;
+  --local: #3857d6;
+  --usb: #b45309;
 }
 @media (prefers-color-scheme: dark) {
   :root {
@@ -26,6 +28,8 @@
     --ok: #5fd08f;
     --err: #ff8a80;
     --row-hover: #242a38;
+    --local: #7a93ff;
+    --usb: #f5a524;
   }
 }
 * { box-sizing: border-box; }
@@ -154,3 +158,9 @@ dialog::backdrop { background: rgb(0 0 0 / 0.4); }
 .wizard h3 { margin: 0 0 8px; }
 .wizard h4 { margin: 12px 0 4px; }
 #browser-pane { margin-top: 12px; }
+.tabs button { display: inline-flex; align-items: center; gap: 6px; }
+.icon { width: 1em; height: 1em; flex: none; }
+.tabs .local .icon { color: var(--local); }
+.tabs .usb .icon { color: var(--usb); }
+.tabs .local[aria-selected="true"] { box-shadow: inset 0 3px 0 var(--local); }
+.tabs .usb[aria-selected="true"] { box-shadow: inset 0 3px 0 var(--usb); }
