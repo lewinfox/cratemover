@@ -1,20 +1,20 @@
 # dj-library-converter
 
-Convert DJ libraries between **Mixxx**, **Rekordbox** and **Serato**: tracks and their metadata,
-playlists, crates, hot cues, memory cues, loops and beat grids. It has a web UI (Docker) and a
-command line.
+Read, write, convert and sync DJ libraries between **Mixxx**, **Rekordbox** (USB sticks, XML and
+Rekordbox 6/7's own library) and **Serato** (on the computer or a USB stick): tracks, playlists,
+crates, hot cues, memory cues, loops and beat grids. It has a web UI (Docker) and a command line.
 
-| From \ To                          | Mixxx | Rekordbox XML | Serato |
-|------------------------------------|:-----:|:-------------:|:------:|
-| Mixxx                              |   ✓   |       ✓       |   ✓    |
-| Rekordbox XML                      |   ✓   |       ✓       |   ✓    |
-| Rekordbox 6/7 library (`master.db`)|   ✓   |       ✓       |   ✓    |
-| Serato                             |   ✓   |       ✓       |   ✓    |
+| From \ To                          | Mixxx | Rekordbox USB | Rekordbox XML | Serato |
+|------------------------------------|:-----:|:-------------:|:-------------:|:------:|
+| Mixxx                              |   ✓   |       ✓       |       ✓       |   ✓    |
+| Rekordbox USB stick                |   ✓   |       ✓       |       ✓       |   ✓    |
+| Rekordbox XML                      |   ✓   |       ✓       |       ✓       |   ✓    |
+| Rekordbox 6/7 library (`master.db`)|   ✓   |       ✓       |       ✓       |   ✓    |
+| Serato (computer or USB)           |   ✓   |       ✓       |       ✓       |   ✓    |
 
-Rekordbox is written as XML, which Rekordbox imports; its own database is only read.
-
-Everything goes through one format-neutral model (`src/djconvert/model.py`), so every
-reader works with every writer.
+Everything goes through one format-neutral model (`src/djconvert/model.py`), so every reader works
+with every writer, and **sync** can keep any two writable libraries in step (Rekordbox's own
+`master.db` can only be read; sync into Rekordbox through a stick or XML).
 
 ## Run it
 
@@ -27,129 +27,170 @@ docker compose up --build        # then open http://localhost:8000
 
 `compose.yaml` mounts:
 
-| Variable       | Default     | Mounted at                | What                                                        |
-|----------------|-------------|---------------------------|-------------------------------------------------------------|
-| `MIXXX_DIR`    | `~/.mixxx`  | `/sources/mixxx` (ro)     | Mixxx's settings folder with `mixxxdb.sqlite`               |
-| `REKORDBOX_DIR`| `./sources/rekordbox` | `/sources/rekordbox` (ro) | Rekordbox 6/7's folder (`~/Library/Pioneer/rekordbox`, `%APPDATA%\Pioneer\rekordbox`) |
-| —              | `./sources` | `/sources/files` (ro)     | Drop a `rekordbox.xml`, `mixxxdb.sqlite` or `_Serato_` here |
-| `MUSIC_DIR`    | `~/Music`   | **the same path** (ro)    | Your music (a Mac's `~/Music/_Serato_` comes with it)       |
-| `MUSIC_ACCESS` | `ro`        |                           | Set to `rw` to let it write Serato tags into the files      |
-| `EXPORT_DIR`   | `./export`  | `/export`                 | Where conversions are written                               |
-| `PORT`         | `8000`      | 127.0.0.1                 |                                                             |
-| `UID`/`GID`    | `1000`      |                           | User the container writes files as                          |
+| Variable        | Default               | Mounted at              | What                                                         |
+|-----------------|-----------------------|-------------------------|--------------------------------------------------------------|
+| `USB_DIR`       | `/media`              | **same path**, writable | Where USB sticks appear (`/run/media`, `/Volumes` on a Mac)  |
+| `USB_MOUNT_MODE`| `rw`                  |                         | `rw,rslave` (Linux) shows sticks plugged in after startup     |
+| `MIXXX_DIR`     | `~/.mixxx`            | `/sources/mixxx`, writable | Mixxx's folder with `mixxxdb.sqlite`                     |
+| `REKORDBOX_DIR` | `./sources/rekordbox` | `/sources/rekordbox` (ro) | Rekordbox 6/7's folder (`~/Library/Pioneer/rekordbox`, `%APPDATA%\Pioneer\rekordbox`) |
+| `MUSIC_DIR`     | `~/Music`             | **same path** (ro)      | Your music (a Mac's `~/Music/_Serato_` comes with it)        |
+| `MUSIC_ACCESS`  | `ro`                  |                         | `rw` lets it write Serato cue tags into your music files     |
+| —               | `./sources`           | `/sources/files` (ro)   | Drop a `rekordbox.xml`, `mixxxdb.sqlite` or `_Serato_` here  |
+| `EXPORT_DIR`    | `./export`            | `/export`               | Where new libraries are written                              |
+| `PORT`, `UID`/`GID` | `8000`, `1000`    |                         | Port on 127.0.0.1; the user files are written as             |
 
 ```sh
-MUSIC_DIR=/data/music MUSIC_ACCESS=rw docker compose up --build
+USB_DIR=/run/media MUSIC_DIR=/data/music docker compose up --build
 ```
 
-**Music is mounted at its real path** because libraries store absolute paths. If your library
-spans several folders, add a volume line per folder. You can also upload a `rekordbox.xml`,
-`mixxxdb.sqlite` or a zip of a `_Serato_` folder in the UI.
-
-In networks that rate-limit Docker Hub: `docker compose build --build-arg
-PYTHON_IMAGE=mirror.gcr.io/library/python:3.13-slim-bookworm`.
+Music and sticks are mounted **at their real paths** because libraries store absolute paths. If
+your library spans several folders, add a volume line per folder. The image is ~32 MB to download
+(128 MB unpacked): Alpine Python, the runtime wheels and a 2 MB audio-only ffmpeg (for waveforms
+and MP3 conversion). In networks that rate-limit Docker Hub, add `--build-arg
+PYTHON_IMAGE=mirror.gcr.io/library/python:3.13-alpine3.22` to the build.
 
 ### Command line (uv)
 
 ```sh
-uv run djconvert inspect --from serato ~/Music/_Serato_
-uv run djconvert convert --from mixxx ~/.mixxx --to rekordbox_xml out/
-uv run djconvert convert --from rekordbox_xml rekordbox.xml --to serato out/ \
-    --path 'C:/Users/me/Music=>/Users/me/Music' --write-serato-tags
-uv run djconvert convert --help
-uv run djconvert serve           # the web UI on http://127.0.0.1:8000
+uv run djconvert inspect --from rekordbox_usb /media/me/STICK
+uv run djconvert convert --from mixxx ~/.mixxx --to rekordbox_usb /media/me/STICK
+uv run djconvert convert --from serato /media/me/STICK --serato-root /media/me/STICK \
+    --to rekordbox_usb /media/me/STICK                       # Serato stick -> CDJ stick, same audio
+uv run djconvert sync --a-format mixxx ~/.mixxx --b-format rekordbox_usb /media/me/STICK --dry-run
+uv run djconvert sync --a-format mixxx ~/.mixxx --b-format serato ~/Music/_Serato_ --direction a_to_b
+uv run djconvert serve                                        # the web UI on http://127.0.0.1:8000
+uv run djconvert convert --help                               # every option
 ```
 
-## Using it
+## USB sticks
 
-1. **Source.** Pick the format and the library (`mixxxdb.sqlite`; a Rekordbox XML from
-   *File › Export Collection in xml format*; Rekordbox 6/7's folder with `master.db` and
-   `share/`; or a `_Serato_` folder). For Serato, say which drive
-   root its paths are relative to (`/` for `~/Music/_Serato_` on a Mac, `C:/` on Windows, the
-   mount point for an external drive's own `_Serato_`).
-2. **Look.** Stats, warnings (e.g. files it cannot see), the playlist tree, and per-track cues
-   and grids. Tick playlists to convert only those.
-3. **Target.** Rewrite paths if the target runs elsewhere (`/home/me/Music => /Users/me/Music`),
-   choose the key notation and format options, convert, download.
+**Rekordbox (CDJ/XDJ).** Writing a stick builds `PIONEER/rekordbox/export.pdb` and, per track, the
+`.DAT`/`.EXT`/`.2EX` analysis files (beat grid, hot and memory cues with names and colours,
+waveforms) at the hashed paths players look for. It works in place on a mounted stick:
 
-Then import:
+- audio already on the stick is used where it is, so a Serato or Mixxx library on the same stick
+  converts without copying; other tracks are copied to `/Contents/<artist>/<album>/`;
+- formats players can't play (Ogg, Opus, WMA…) are converted to 320 kbps MP3, with cues and grids
+  moved 26 ms for the MP3 encoder delay;
+- waveforms are reused from existing analysis files (the stick's own, or a Rekordbox library's),
+  otherwise measured with ffmpeg (about 3 s per track, in parallel), otherwise flat placeholders;
+- the previous `export.pdb` is kept as `export.pdb.djconvert-<time>`;
+- **OneLibrary** (`exportLibrary.db`), which the CDJ-3000X, CDJ-1500X, OPUS-QUAD, OMNIS-DUO, XDJ-AZ
+  and XDJ-AN need, is written when the stick already had one or when asked (`--onelibrary on`).
+  This is experimental: nobody has published a hardware test of a third-party one. Otherwise a
+  stale one is moved aside so it can't contradict the new `export.pdb`.
 
-- **Rekordbox:** *Preferences › Advanced › Database › rekordbox xml*, choose the file; the
-  playlists appear under *rekordbox xml*; right-click › *Import Playlist*.
-- **Serato:** quit Serato, back up `_Serato_`, copy the generated `database V2` and `Subcrates`
-  into it. Cues/grids arrive only if you let it write the tags into the audio files. Give it your
-  existing `database V2` as a merge base to keep tracks that aren't in the conversion.
-- **Mixxx:** quit Mixxx, back up `mixxxdb.sqlite`, replace it with the generated one. Give it
-  your existing database as a merge base to add to it rather than replace it.
+**Never plug a stick into Rekordbox to check it**: Rekordbox rewrites sticks it mounts. Test on the
+player, or read it back with this tool or Mixxx (which can browse Rekordbox sticks).
+
+How it was checked: the reader agrees with an independent parser
+([fragmede/rekordbox-pdb](https://github.com/fragmede/rekordbox-pdb), vendored in
+`tests/oracles/`) on real exports up to 3,886 tracks; rewriting a real Rekordbox 6.8.6 stick
+reproduces its colour, column, menu, genre, artist, album, playlist and entry pages byte for byte,
+and its cue sections too; the analysis-folder hash matches Rekordbox's; pyrekordbox parses every
+analysis file we write. The page-layout rules are ported from
+[baken](https://github.com/M-Igashi/baken), whose sticks a CDJ-2000NXS2 has read. **This tool's
+own sticks have not been tried on a player yet.**
+
+**Serato.** A Serato library on a stick is a `_Serato_` folder at the stick's root with paths
+relative to the stick: choose Serato and set "Serato paths relative to" to the stick's mount point
+(the UI does this for sticks it finds). Cues and grids go into the audio files' tags.
+
+## Sync
+
+Sync reads two libraries, matches their tracks and writes the merged result back **in place**,
+backing up every file it changes (`*.djconvert-<time>`). Quit the DJ software first. One way
+(A → B or B → A) or both ways; *Preview* (`--dry-run`) reports what would change.
+
+- **Matching**, strongest first: the same path (after path rules), then the same file name and
+  size, then the same artist and title with lengths within 2 s, then a unique file name. So a
+  track copied onto a stick still matches its original.
+- **Tracks** the other side lacks are added (and copied onto sticks).
+- **Cues**: *merge* (the winning side's cues plus the other's in slots and spots it leaves free),
+  *replace*, or *fill* (only tracks with none). **Grids** and **tags**: *fill* or *replace*.
+  **Playlists**: *merge* same-named ones (add missing tracks), *replace* them, or only *add* new ones.
+  Nothing is deleted.
+- Syncing twice in a row changes nothing: changes are judged by what a player shows (spots marked,
+  hot cues A–H and their names), not by format details that can't survive the round trip.
+- A matched MP3 and non-MP3 pair (a transcode made for a stick) has its cues shifted by the MP3
+  encoder delay.
 
 ## What converts, and how
 
-| Thing              | Mixxx                         | Rekordbox XML                   | Serato                                  |
+| Thing              | Mixxx                         | Rekordbox                       | Serato                                  |
 |--------------------|-------------------------------|---------------------------------|-----------------------------------------|
 | Hot cues           | 36 slots (name, colour)       | A–H (name, colour)              | 8 or 16 slots, in file tags             |
 | Memory cues        | *none*: into free hot slots 9+| memory cues                     | *none*: into free hot cue slots         |
 | Hot loops          | hot loops                     | hot cue loops A–H               | hot cue + saved loop                    |
 | Saved loops        | hot loops 9+                  | memory loops                    | 8 saved loops                           |
-| Main cue, intro, outro | own cue types             | memory cues                     | hot cue slots, if free                  |
-| Beat grid          | constant grid or beat map     | `TEMPO` sections                | beat grid markers                       |
+| Main cue, intro, outro | own cue types             | memory cues ("Intro", "Outro")  | hot cue slots, if free                  |
+| Beat grid          | constant grid or beat map     | tempo sections / per-beat grid  | beat grid markers                       |
 | Playlists/crates   | playlists + flat crates       | folders + playlists             | crates with sub-crates (`A%%B.crate`)   |
-| Key                | key id                        | Camelot/Open Key/musical        | text                                    |
+| Key                | key id                        | Camelot/Open Key/musical text   | text                                    |
 | Track colour       | any RGB                       | nearest of 8                    | nearest of Serato's palette             |
 | Rating, plays, date added, comment, genre, label, … | ✓ | ✓                     | ✓ (no rating in Serato)                 |
 
-Not converted: Serato smart crates, Flip, history; Rekordbox My Tags, hot cue banks, history;
-Mixxx Auto DJ and history playlists; artwork and waveforms (each program regenerates those).
+Not converted: Serato smart crates, Flip, history; Rekordbox My Tags, hot cue banks, history,
+artwork, phrase analysis; Mixxx Auto DJ and history playlists. Waveforms are only carried between
+Rekordbox libraries (or measured); the other programs draw their own.
 
-**Timing.** All positions are kept on one reference timeline: how Rekordbox and Serato decode the
-file. Mixxx skips an MP3's encoder delay differently depending on its LAME/Xing header (~26 ms
+**Timing.** All positions are kept on one reference timeline, the way Rekordbox and Serato decode
+the file. Mixxx skips an MP3's encoder delay differently depending on its LAME/Xing header (~26 ms
 with MAD/FFmpeg, up to 50 ms with CoreAudio) and skips AAC priming samples; the Mixxx reader and
 writer correct for both, which needs the audio files to be reachable. Tell it which MP3 decoder
 your Mixxx uses (MAD on Linux/Windows builds, CoreAudio on macOS).
 
-**Rekordbox's own database.** `master.db` is SQLCipher-encrypted; the optional `rekordbox` extra
-([pyrekordbox](https://github.com/dylanljones/pyrekordbox), included in the Docker image) opens
-it with the publicly known key. It is copied before reading, so Rekordbox can stay open. Beat
-grids are not in the database but in the analysis files under `share/PIONEER/USBANLZ`, which is
-why it wants the whole Rekordbox folder. Intelligent playlists are skipped.
-
 **Serato data lives in the audio files.** Serato's database only has metadata and paths. Cue
 points, loops and beat grids are `Serato Markers2`, `Serato Markers_` and `Serato BeatGrid` tags
 inside each MP3/AIFF/WAV (ID3 `GEOB`), FLAC and Ogg (Vorbis comments) and M4A (freeform atoms).
-Reading Serato therefore needs the music mounted; writing Serato cues needs it mounted writable.
-Existing Serato Flip data in a file is kept.
+Reading Serato needs the music mounted; writing Serato cues needs it writable. Existing Flip data
+in a file is kept.
+
+**Rekordbox's own library.** `master.db` is SQLCipher-encrypted with a publicly known key (as are
+OneLibrary databases); the `rekordbox` extra (`sqlcipher3`) opens them. It is copied before
+reading, so Rekordbox can stay open. Beat grids come from the analysis files under `share/`, which
+is why it wants the whole Rekordbox folder. Intelligent playlists are skipped.
 
 ## Develop
 
 ```sh
-uv sync --all-extras             # the web and rekordbox extras plus dev tools
+uv sync --all-extras             # web and rekordbox extras plus dev tools
 uv run pytest                    # generates test audio with ffmpeg; those tests skip without it
 uv run ruff check && uv run ruff format --check
 uv run python tests/fakelib.py /tmp/demo   # a demo Mixxx library + music to point the app at
 ```
 
-Layout: `model.py` (the shared model), `mixxx.py`, `rekordbox_xml.py`, `rekordbox_db.py`, `serato/` (`binfile`
-for `database V2`/crates, `markers` for the tag payloads, `tags` for audio-file I/O, `library`),
-`offsets.py` (decoder offsets), `grid.py`, `keys.py`, `colours.py`, `convert.py` (read → remap
-paths → write), `cli.py`, `web/`. Tests use real files from Serato, Rekordbox and Mixxx's test
-suite; see `tests/fixtures/README.md`.
+Layout (`src/djconvert/`): `model.py` (the shared model), `mixxx.py`, `rekordbox_xml.py`,
+`rekordbox_db.py`, `pioneer/` (`pdb` for `export.pdb`, `anlz` for analysis files, `waveform`,
+`onelibrary`, `keys` for the SQLCipher keys, `usb`), `serato/` (`binfile` for `database V2`/crates,
+`markers` for the tag payloads, `tags` for audio-file I/O, `library`), `sync.py` (matching and
+merging), `convert.py` (read → remap paths → write, in place or new; `sync_libraries`),
+`offsets.py`, `grid.py`, `keys.py`, `colours.py`, `paths.py`, `cli.py`, `web/`. Tests use real
+files from Serato, Rekordbox (6.6, 6.8 and a 3,886-track export) and Mixxx's test suite; see
+`tests/fixtures/README.md`.
 
-Format sources: [Holzhaus/serato-tags](https://github.com/Holzhaus/serato-tags),
-[bvandercar-vt/serato-tools](https://github.com/bvandercar-vt/serato-tools), Mixxx's
-`src/track/serato/` and `src/library/serato/`, AlphaTheta's Rekordbox XML format list, and
-[pyrekordbox](https://github.com/dylanljones/pyrekordbox). Decoder offsets and Mixxx database code
-are adapted from [`../mixxx-to-rekordbox`](../mixxx-to-rekordbox) (copied, not shared). GPL-3.0.
+Format sources: [Deep Symmetry's Rekordbox analysis](https://djl-analysis.deepsymmetry.org/),
+[baken](https://github.com/M-Igashi/baken), [rekordbox-pdb](https://github.com/fragmede/rekordbox-pdb),
+[pyrekordbox](https://github.com/dylanljones/pyrekordbox), [rekordcrate](https://github.com/Holzhaus/rekordcrate),
+[Holzhaus/serato-tags](https://github.com/Holzhaus/serato-tags),
+[serato-tools](https://github.com/bvandercar-vt/serato-tools), Mixxx's `src/track/serato/` and
+`src/library/serato/`, and AlphaTheta's Rekordbox XML format list. The research behind the USB
+writer is in [`../mixxx-to-rekordbox/usb-analysis-plan.md`](../mixxx-to-rekordbox/usb-analysis-plan.md).
+Decoder offsets and Mixxx database code are adapted from `../mixxx-to-rekordbox` (copied, not
+shared). GPL-3.0.
 
 ## Open questions
 
-Things not yet verified against the real programs:
+Things not yet verified against real hardware or software:
 
-- Serato has only been tested against sample files, not a running Serato. Unknown: whether it
-  accepts a `database V2` that omits fields it normally writes (length, bitrate, size), the
-  meaning of `ulbl` (assumed track colour) and `utpc` (assumed play count), and whether it reads
-  ID3 tags in WAV files.
-- Whether Serato and Rekordbox place cues identically on MP3s without a LAME header, and on AAC
-  (both are assumed to match the reference timeline).
+- **Players.** No stick written by this tool has been on a CDJ/XDJ yet. Highest risk: older
+  players (CDJ-350/900/2000, XDJ-1000MK2) that other projects' sticks failed on, multi-page tables
+  (big libraries), and OneLibrary on the newest players.
+- **Serato** has only been tested against sample files, not a running Serato: whether it accepts a
+  `database V2` without the fields it normally writes (length, bitrate, size), what `ulbl` (assumed
+  track colour) and `utpc` (assumed play count) mean, and whether it reads ID3 tags in WAV files.
+- Whether Serato and Rekordbox place cues identically on MP3s without a LAME header, and on AAC.
 - Serato beat grid markers are assumed to sit on downbeats; the first marker is moved to one.
 - Rekordbox `master.db`: hot cue slots are read from `djmdCue.Kind` as 1, 2, 3, 5, 6, 7, 8, 9 for
-  A–H, and cue colours from `ColorTableIndex`; both come from secondary sources and need checking
-  against a real library with coloured cues in every slot.
+  A–H, and cue colours from `ColorTableIndex`; both come from secondary sources.
+- The 26 ms MP3 transcode shift was measured for FLAC → MP3 only.

@@ -3,8 +3,8 @@
 Environment:
 
 * ``EXPORT_DIR`` (default ``./export``): conversions are written under here.
-* ``BROWSE_ROOTS`` (default ``/sources:<EXPORT_DIR>:$HOME``): folders the file
-  picker may show, separated by ``:``.
+* ``BROWSE_ROOTS`` (default ``/sources:<EXPORT_DIR>:/media:/mnt:/Volumes:$HOME``): folders
+  the file picker may show and libraries may be written in, separated by ``:``.
 * ``UPLOAD_DIR`` (default a temp dir): where uploaded libraries are unpacked.
 """
 
@@ -31,21 +31,27 @@ from .. import __version__
 from ..convert import (
     FORMATS,
     SOURCE_FORMATS,
+    SYNC_FORMATS,
     TARGET_FORMATS,
     ReadOptions,
+    SyncSide,
     WriteOptions,
     read_library,
+    sync_libraries,
     write_library,
 )
 from ..keys import KeyNotation, format_key
 from ..model import Library, Playlist, Track
 from ..paths import make_resolver, parse_rules
+from ..sync import CuePolicy, PlaylistPolicy, Prefer, SyncOptions
 
 EXPORT_DIR = Path(os.environ.get("EXPORT_DIR", "export")).resolve()
 UPLOAD_DIR = Path(os.environ.get("UPLOAD_DIR") or tempfile.mkdtemp(prefix="djconvert-uploads-"))
 BROWSE_ROOTS = [
     Path(p)
-    for p in os.environ.get("BROWSE_ROOTS", f"/sources:{EXPORT_DIR}:{Path.home()}").split(":")
+    for p in os.environ.get(
+        "BROWSE_ROOTS", f"/sources:{EXPORT_DIR}:/media:/mnt:/Volumes:/run/media:{Path.home()}"
+    ).split(":")
     if p
 ]
 
@@ -110,6 +116,7 @@ def info() -> dict[str, Any]:
         "formats": FORMATS,
         "source_formats": SOURCE_FORMATS,
         "target_formats": TARGET_FORMATS,
+        "sync_formats": SYNC_FORMATS,
         "key_notations": [k.value for k in KeyNotation],
         "export_dir": str(EXPORT_DIR),
         "browse_roots": [str(p) for p in BROWSE_ROOTS if p.exists()],
@@ -117,31 +124,50 @@ def info() -> dict[str, Any]:
     }
 
 
+REMOVABLE = ("/media/", "/mnt/", "/Volumes/", "/run/media/")
+
+
+def _is_removable(path: Path) -> bool:
+    return str(path).startswith(REMOVABLE)
+
+
 def _suggest_sources() -> list[dict[str, str]]:
-    """Libraries found in the usual mount points and home folder."""
+    """Libraries and sticks found in the usual mount points and home folder."""
     found: list[dict[str, str]] = []
+    patterns = (
+        ("mixxxdb.sqlite", "mixxx"),
+        ("*/mixxxdb.sqlite", "mixxx"),
+        (".mixxx/mixxxdb.sqlite", "mixxx"),
+        ("PIONEER/rekordbox/export.pdb", "rekordbox_usb"),
+        ("*/PIONEER/rekordbox/export.pdb", "rekordbox_usb"),
+        ("*/*/PIONEER/rekordbox/export.pdb", "rekordbox_usb"),
+        ("_Serato_/database V2", "serato"),
+        ("*/_Serato_/database V2", "serato"),
+        ("*/*/_Serato_/database V2", "serato"),
+        ("database V2", "serato"),
+        ("*/database V2", "serato"),
+        ("*.xml", "rekordbox_xml"),
+        ("*/*.xml", "rekordbox_xml"),
+        ("master.db", "rekordbox_db"),
+        ("*/master.db", "rekordbox_db"),
+    )
     for root in BROWSE_ROOTS:
         if not root.is_dir():
             continue
-        for depth_glob, fmt in (
-            ("mixxxdb.sqlite", "mixxx"),
-            ("*/mixxxdb.sqlite", "mixxx"),
-            (".mixxx/mixxxdb.sqlite", "mixxx"),
-            ("_Serato_/database V2", "serato"),
-            ("*/_Serato_/database V2", "serato"),
-            ("database V2", "serato"),
-            ("*/database V2", "serato"),
-            ("*.xml", "rekordbox_xml"),
-            ("*/*.xml", "rekordbox_xml"),
-            ("master.db", "rekordbox_db"),
-            ("*/master.db", "rekordbox_db"),
-        ):
+        for pattern, fmt in patterns:
             try:
-                for match in sorted(root.glob(depth_glob))[:10]:
-                    path = match.parent if fmt == "serato" else match
-                    if fmt == "rekordbox_xml" and not _is_rekordbox_xml(match):
+                for match in sorted(root.glob(pattern))[:10]:
+                    entry = {"format": fmt, "path": str(match)}
+                    if fmt == "rekordbox_usb":
+                        entry["path"] = str(match.parents[2])
+                    elif fmt == "serato":
+                        folder = match.parent
+                        entry["path"] = str(folder)
+                        # A _Serato_ at a drive's root stores paths relative to that drive.
+                        drive = folder.parent if folder.name == "_Serato_" else folder
+                        entry["serato_root"] = str(drive) if _is_removable(drive) else "/"
+                    elif fmt == "rekordbox_xml" and not _is_rekordbox_xml(match):
                         continue
-                    entry = {"format": fmt, "path": str(path)}
                     if entry not in found:
                         found.append(entry)
             except OSError:
@@ -226,8 +252,8 @@ class ReadRequest(BaseModel):
 
 
 class WriteRequest(BaseModel):
-    library_id: str
-    format: str
+    library_id: str = ""
+    format: str = ""
     output_name: str = "converted"
     path_rules: str = ""
     key_notation: str = ""
@@ -242,6 +268,28 @@ class WriteRequest(BaseModel):
     mixxx_base_database: str = ""
     mixxx_playlists_as_crates: bool = False
     playlists: list[str] = []
+    # Write into an existing library or onto a stick instead of the export folder.
+    in_place: bool = False
+    target_path: str = ""
+    copy_missing: bool = True
+    waveforms: bool = True
+    device_name: str = ""
+    onelibrary: str = "auto"
+
+
+class SyncRequest(BaseModel):
+    a: ReadRequest
+    b: ReadRequest
+    direction: str = "both"  # a_to_b | b_to_a | both
+    prefer: str = "incoming"  # the side changes come *from* wins; for "both", A wins
+    cues: str = "merge"
+    grids: str = "fill"
+    metadata: str = "fill"
+    playlists: str = "merge"
+    add_tracks: bool = True
+    path_rules: str = ""  # A paths => B paths
+    dry_run: bool = True
+    write: WriteRequest | None = None  # format options for the written side(s)
 
 
 def _tree(node: Playlist, parents: tuple[str, ...] = ()) -> list[dict[str, Any]]:
@@ -289,16 +337,7 @@ def _track_row(track: Track) -> dict[str, Any]:
 
 @app.post("/api/inspect")
 def inspect(request: ReadRequest) -> dict[str, str]:
-    if request.format not in FORMATS:
-        raise HTTPException(400, "unknown format")
-    options = ReadOptions(
-        format=request.format,  # type: ignore[arg-type]
-        path=request.path,
-        access_rules=parse_rules(request.access_rules),
-        mp3_decoder=request.mp3_decoder,  # type: ignore[arg-type]
-        serato_root=request.serato_root or "/",
-        read_file_tags=request.read_file_tags,
-    )
+    options = _read_options(request)
 
     def work(job: Job, progress: Any) -> dict[str, Any]:
         progress("Reading library")
@@ -360,17 +399,23 @@ def _safe_output(name: str) -> Path:
     return EXPORT_DIR / cleaned
 
 
-@app.post("/api/convert")
-def convert(request: WriteRequest) -> dict[str, str]:
-    if request.library_id not in _libraries:
-        raise HTTPException(404, "library not loaded; load it again")
-    if request.format not in TARGET_FORMATS:
-        raise HTTPException(400, "unknown format")
-    read_options, library = _libraries[request.library_id]
-    out = _safe_output(request.output_name)
-    options = WriteOptions(
+def _read_options(request: ReadRequest) -> ReadOptions:
+    if request.format not in FORMATS:
+        raise HTTPException(400, f"unknown format {request.format!r}")
+    return ReadOptions(
         format=request.format,  # type: ignore[arg-type]
-        output_dir=str(out),
+        path=request.path,
+        access_rules=parse_rules(request.access_rules),
+        mp3_decoder=request.mp3_decoder,  # type: ignore[arg-type]
+        serato_root=request.serato_root or "/",
+        read_file_tags=request.read_file_tags,
+    )
+
+
+def _write_options(request: WriteRequest, output: Path) -> WriteOptions:
+    return WriteOptions(
+        format=request.format,  # type: ignore[arg-type]
+        output_dir=str(output),
         path_rules=parse_rules(request.path_rules),
         key_notation=KeyNotation(request.key_notation) if request.key_notation else None,
         mp3_decoder=request.mp3_decoder,  # type: ignore[arg-type]
@@ -383,16 +428,97 @@ def convert(request: WriteRequest) -> dict[str, str]:
         serato_base_database=request.serato_base_database,
         mixxx_base_database=request.mixxx_base_database,
         mixxx_playlists_as_crates=request.mixxx_playlists_as_crates,
+        copy_missing=request.copy_missing,
+        waveforms=request.waveforms,
+        device_name=request.device_name,
+        onelibrary=request.onelibrary,
+        in_place=request.in_place,
         playlists=request.playlists,
     )
+
+
+def _relative_to_export(files: list[str]) -> list[dict[str, Any]]:
+    out = []
+    for f in files:
+        path = Path(f).resolve()
+        inside = EXPORT_DIR in path.parents
+        out.append(
+            {"path": str(path), "download": str(path.relative_to(EXPORT_DIR)) if inside else None}
+        )
+    return out
+
+
+@app.post("/api/convert")
+def convert(request: WriteRequest) -> dict[str, str]:
+    if request.library_id not in _libraries:
+        raise HTTPException(404, "library not loaded; load it again")
+    if request.format not in TARGET_FORMATS:
+        raise HTTPException(400, "unknown format")
+    read_options, library = _libraries[request.library_id]
+    direct = request.in_place or request.format == "rekordbox_usb"
+    if direct:
+        out = Path(request.target_path)
+        if not request.target_path or not _allowed(out):
+            raise HTTPException(403, "choose a library or drive inside the mounted folders")
+        if request.format == "rekordbox_usb" and not out.is_dir():
+            raise HTTPException(400, f"{out} is not a folder or mounted drive")
+    else:
+        out = _safe_output(request.output_name)
+    options = _write_options(request, out)
 
     def work(job: Job, progress: Any) -> dict[str, Any]:
         progress("Converting")
         result = write_library(library, options, read_options.access_rules, progress)
-        files = [str(Path(f).relative_to(EXPORT_DIR)) for f in result.files]
-        return result.as_dict() | {"files": files, "output_dir": str(out), "format": request.format}
+        return result.as_dict() | {
+            "files": _relative_to_export(result.files),
+            "output_dir": str(out),
+            "zip": None if direct else out.name,
+            "format": request.format,
+            "in_place": direct,
+        }
 
     return {"job_id": _start("convert", work).id}
+
+
+@app.post("/api/sync")
+def sync(request: SyncRequest) -> dict[str, str]:
+    a, b = _read_options(request.a), _read_options(request.b)
+    writes_to = {"a_to_b": [b], "b_to_a": [a], "both": [a, b]}.get(request.direction)
+    if writes_to is None:
+        raise HTTPException(400, "direction must be a_to_b, b_to_a or both")
+    for side in writes_to:
+        if side.format not in SYNC_FORMATS:
+            raise HTTPException(
+                400, f"{FORMATS[side.format]} can't be written; sync it one way only"
+            )
+        if not _allowed(Path(side.path)):
+            raise HTTPException(403, f"{side.path} is outside the mounted folders")
+    try:
+        options = SyncOptions(
+            prefer=Prefer(request.prefer),
+            cues=CuePolicy(request.cues),
+            grids=CuePolicy(request.grids),
+            metadata=CuePolicy(request.metadata),
+            playlists=PlaylistPolicy(request.playlists),
+            add_tracks=request.add_tracks,
+            path_rules=parse_rules(request.path_rules),
+        )
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    template = request.write or WriteRequest(library_id="", format="mixxx")
+
+    def side(read: ReadOptions) -> SyncSide:
+        write = _write_options(template, Path(read.path))
+        write.serato_root = read.serato_root
+        return SyncSide(read, write)
+
+    def work(job: Job, progress: Any) -> dict[str, Any]:
+        result = sync_libraries(
+            side(a), side(b), request.direction, options, request.dry_run, progress
+        )  # type: ignore[arg-type]
+        return result.as_dict() | {"dry_run": request.dry_run}
+
+    return {"job_id": _start("sync", work).id}
 
 
 @app.get("/api/download")

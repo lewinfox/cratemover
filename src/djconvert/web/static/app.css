@@ -119,3 +119,12 @@ dialog::backdrop { background: rgb(0 0 0 / 0.4); }
 #browser-list li.file::before { content: "📄 "; }
 .files a { display: inline-block; margin: 4px 8px 4px 0; }
 .ok { color: var(--ok); }
+.tabs { display: flex; gap: 4px; margin-top: 14px; border-bottom: 1px solid var(--border); }
+.tabs button { background: transparent; color: var(--muted); border: 1px solid transparent; border-bottom: none; border-radius: 6px 6px 0 0; }
+.tabs button[aria-selected="true"] { color: var(--text); background: var(--card); border-color: var(--border); }
+.split2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+@media (max-width: 760px) { .split2 { grid-template-columns: 1fr; } }
+.side { border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; min-width: 0; }
+.side h3 { margin: 0 0 4px; }
+.side .row > label { min-width: 0; }
+.side .row { flex-direction: column; align-items: stretch; }

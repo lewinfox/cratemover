@@ -1,4 +1,4 @@
-"""Command line: ``djconvert inspect``, ``djconvert convert``, ``djconvert serve``."""
+"""Command line: ``djconvert inspect``, ``convert``, ``sync`` and ``serve``."""
 
 from __future__ import annotations
 
@@ -8,15 +8,19 @@ import sys
 
 from .convert import (
     SOURCE_FORMATS,
+    SYNC_FORMATS,
     TARGET_FORMATS,
     ReadOptions,
+    SyncSide,
     WriteOptions,
     read_library,
+    sync_libraries,
     write_library,
 )
 from .keys import KeyNotation
 from .offsets import MP3_DECODERS
 from .paths import parse_rules
+from .sync import CuePolicy, PlaylistPolicy, Prefer, SyncOptions
 
 
 def _add_read_args(parser: argparse.ArgumentParser) -> None:
@@ -56,6 +60,13 @@ def _read_options(args: argparse.Namespace) -> ReadOptions:
     )
 
 
+def _add_usb_args(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--no-copy", action="store_true", help="don't copy tracks onto USB sticks")
+    parser.add_argument("--no-waveforms", action="store_true", help="don't measure waveforms (USB)")
+    parser.add_argument("--onelibrary", choices=["auto", "on", "off"], default="auto")
+    parser.add_argument("--device-name", default="")
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="djconvert", description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
@@ -89,6 +100,41 @@ def main(argv: list[str] | None = None) -> int:
     convert.add_argument("--mixxx-base-database", default="")
     convert.add_argument("--mixxx-playlists-as-crates", action="store_true")
     convert.add_argument("--no-memory-to-hot", action="store_true", help="drop memory cues instead")
+    convert.add_argument(
+        "--in-place",
+        action="store_true",
+        help="update the existing library at OUTPUT (backed up first) instead of writing a new one",
+    )
+    _add_usb_args(convert)
+
+    sync = sub.add_parser("sync", help="sync two libraries in place")
+    sync.add_argument("--a-format", required=True, choices=SOURCE_FORMATS)
+    sync.add_argument("a", help="library A")
+    sync.add_argument("--b-format", required=True, choices=SOURCE_FORMATS)
+    sync.add_argument("b", help="library B")
+    sync.add_argument("--direction", choices=["both", "a_to_b", "b_to_a"], default="both")
+    sync.add_argument(
+        "--prefer",
+        choices=[p.value for p in Prefer],
+        default="incoming",
+        help="incoming: the side changes come from wins (A, for both ways); base: the other",
+    )
+    sync.add_argument("--cues", choices=[c.value for c in CuePolicy], default="merge")
+    sync.add_argument("--grids", choices=["fill", "replace"], default="fill")
+    sync.add_argument("--metadata", choices=["fill", "replace"], default="fill")
+    sync.add_argument("--playlists", choices=[p.value for p in PlaylistPolicy], default="merge")
+    sync.add_argument("--no-add", action="store_true", help="don't add tracks the other side lacks")
+    sync.add_argument(
+        "--path", action="append", default=[], metavar="FROM=>TO", help="A paths => B paths"
+    )
+    sync.add_argument("--a-serato-root", default="/")
+    sync.add_argument("--b-serato-root", default="/")
+    sync.add_argument("--mp3-decoder", choices=MP3_DECODERS, default="MAD")
+    sync.add_argument("--write-serato-tags", action="store_true")
+    sync.add_argument(
+        "--dry-run", action="store_true", help="report what would change, write nothing"
+    )
+    _add_usb_args(sync)
 
     serve = sub.add_parser("serve", help="run the web UI")
     serve.add_argument("--host", default="127.0.0.1")
@@ -103,6 +149,48 @@ def main(argv: list[str] | None = None) -> int:
 
     def progress(message: str) -> None:
         print(message, file=sys.stderr)
+
+    if args.command == "sync":
+        for fmt in {"both": [args.a_format, args.b_format], "a_to_b": [args.b_format],
+                    "b_to_a": [args.a_format]}[args.direction]:  # fmt: skip
+            if fmt not in SYNC_FORMATS:
+                parser.error(f"{fmt} can only be read; sync it one way only")
+
+        def side(fmt: str, path: str, root: str) -> SyncSide:
+            read = ReadOptions(
+                format=fmt, path=path, mp3_decoder=args.mp3_decoder, serato_root=root
+            )
+            write = WriteOptions(
+                format=fmt,
+                output_dir=path,
+                mp3_decoder=args.mp3_decoder,
+                serato_write_tags=args.write_serato_tags,
+                copy_missing=not args.no_copy,
+                waveforms=not args.no_waveforms,
+                onelibrary=args.onelibrary,
+                device_name=args.device_name,
+            )
+            return SyncSide(read, write)
+
+        options = SyncOptions(
+            prefer=Prefer(args.prefer),
+            cues=CuePolicy(args.cues),
+            grids=CuePolicy(args.grids),
+            metadata=CuePolicy(args.metadata),
+            playlists=PlaylistPolicy(args.playlists),
+            add_tracks=not args.no_add,
+            path_rules=parse_rules("\n".join(args.path)),
+        )
+        result = sync_libraries(
+            side(args.a_format, args.a, args.a_serato_root),
+            side(args.b_format, args.b, args.b_serato_root),
+            args.direction,
+            options,
+            args.dry_run,
+            progress,
+        )
+        print(json.dumps(result.as_dict(), indent=2, default=str))
+        return 0
 
     read = _read_options(args)
     library = read_library(read, progress)
@@ -127,6 +215,11 @@ def main(argv: list[str] | None = None) -> int:
         serato_base_database=args.serato_base_database,
         mixxx_base_database=args.mixxx_base_database,
         mixxx_playlists_as_crates=args.mixxx_playlists_as_crates,
+        copy_missing=not args.no_copy,
+        waveforms=not args.no_waveforms,
+        onelibrary=args.onelibrary,
+        device_name=args.device_name,
+        in_place=args.in_place,
         playlists=args.playlist,
     )
     result = write_library(library, write, read.access_rules, progress)

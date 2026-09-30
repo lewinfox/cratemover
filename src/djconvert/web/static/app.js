@@ -1,14 +1,15 @@
 "use strict";
 
 const $ = (id) => document.getElementById(id);
-const state = { info: null, library: null, selected: new Set(), currentPlaylist: "" };
+const state = { info: null, library: null, selected: new Set(), currentPlaylist: "", pickers: {} };
 
 const HINTS = {
   mixxx: "Mixxx's mixxxdb.sqlite, or the folder holding it (~/.mixxx on Linux).",
+  rekordbox_usb: "A Rekordbox USB stick: its mount point (the folder holding PIONEER/). Cues, grids and waveforms come from its analysis files.",
   rekordbox_xml: "In Rekordbox: File › Export Collection in xml format. Choose or upload that file.",
   rekordbox_db: "Rekordbox 6/7's own library: the rekordbox folder (~/Library/Pioneer/rekordbox on a Mac, " +
     "%APPDATA%\\Pioneer\\rekordbox on Windows) or its master.db. Beat grids come from its share/ folder.",
-  serato: "The _Serato_ folder (~/Music/_Serato_, or the root of an external drive), or its parent. " +
+  serato: "A _Serato_ folder (~/Music/_Serato_, or at the root of a USB stick), or the folder holding it. " +
     "Cue points and beat grids are read from the music files, so they must be reachable too.",
 };
 
@@ -16,15 +17,18 @@ const NEXT_STEPS = {
   rekordbox_xml: `<h3>Importing into Rekordbox</h3><ol>
     <li>Rekordbox › Preferences › Advanced › Database › <i>rekordbox xml</i> › Imported Library: choose <code>rekordbox.xml</code>.</li>
     <li>It appears under <b>rekordbox xml</b> in the tree (enable it under Preferences › View › Layout if not).</li>
-    <li>Right-click playlists there › <i>Import Playlist</i>. Tracks already in your collection keep their old cues unless you re-import them with <i>Import To Collection</i>.</li></ol>`,
-  serato: `<h3>Installing into Serato</h3><ol>
-    <li>Quit Serato. <b>Back up</b> your existing <code>_Serato_</code> folder.</li>
-    <li>Copy the generated <code>database V2</code> and <code>Subcrates</code> into it (on a Mac: <code>~/Music/_Serato_</code>; for an external drive: <code>_Serato_</code> at the drive's root). Without a merge base, the database replaces your existing one.</li>
-    <li>Start Serato. Cue points, loops and beat grids come from the files' tags, if you chose to write them.</li></ol>`,
+    <li>Right-click playlists there › <i>Import Playlist</i>.</li></ol>`,
+  rekordbox_usb: `<h3>Using the stick</h3><ol>
+    <li>Eject it safely and plug it into the player. Pre-NXS2 players only play MP3 reliably.</li>
+    <li>Don't open it in Rekordbox: Rekordbox rewrites sticks it mounts.</li>
+    <li>If something looks wrong, the previous <code>export.pdb</code> is kept next to the new one with a <code>.djconvert-…</code> suffix.</li></ol>`,
+  serato: `<h3>Using it in Serato</h3><ol>
+    <li>Quit Serato. For a new library, copy the generated <code>database V2</code> and <code>Subcrates</code> into your <code>_Serato_</code> folder (back it up first).</li>
+    <li>Updated in place? Just start Serato.</li>
+    <li>Cue points, loops and beat grids come from the files' tags, if you chose to write them.</li></ol>`,
   mixxx: `<h3>Using it in Mixxx</h3><ol>
-    <li>Quit Mixxx. <b>Back up</b> your existing <code>mixxxdb.sqlite</code> (~/.mixxx on Linux, ~/Library/Application Support/Mixxx on macOS, %LOCALAPPDATA%\\Mixxx on Windows).</li>
-    <li>Replace it with the generated <code>mixxxdb.sqlite</code> (merged into your existing library if you gave one).</li>
-    <li>Start Mixxx. Add your music folder under Preferences › Library if it is not there.</li></ol>`,
+    <li>Updated in place? Start Mixxx; a backup of the old database sits next to it.</li>
+    <li>New library: quit Mixxx, back up <code>mixxxdb.sqlite</code> and replace it with the generated one.</li></ol>`,
 };
 
 async function api(path, options = {}) {
@@ -32,7 +36,7 @@ async function api(path, options = {}) {
   if (!response.ok) {
     let detail = response.statusText;
     try { detail = (await response.json()).detail || detail; } catch (_) { /* not JSON */ }
-    throw new Error(detail);
+    throw new Error(typeof detail === "string" ? detail : JSON.stringify(detail));
   }
   return response.json();
 }
@@ -60,8 +64,8 @@ function escapeHtml(text) {
   return String(text ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 }
 
-function showFor(attr, value) {
-  document.querySelectorAll(`[${attr}]`).forEach((el) => {
+function showFor(root, attr, value) {
+  root.querySelectorAll(`[${attr}]`).forEach((el) => {
     el.classList.toggle("hidden", !el.getAttribute(attr).split(" ").includes(value));
   });
 }
@@ -70,37 +74,89 @@ function stat(label, value) {
   return `<div class="stat"><b>${escapeHtml(value)}</b><span>${escapeHtml(label)}</span></div>`;
 }
 
+const options = (formats) => Object.entries(formats)
+  .map(([k, v]) => `<option value="${k}">${escapeHtml(v)}</option>`).join("");
+
+// --- library pickers -----------------------------------------------------------------------
+
+function makePicker(container, formats) {
+  container.appendChild($("picker-template").content.cloneNode(true));
+  const field = (name) => container.querySelector(`[data-field="${name}"]`);
+  field("format").innerHTML = options(formats);
+  const update = () => {
+    field("hint").textContent = HINTS[field("format").value] || "";
+    showFor(container, "data-show-format", field("format").value);
+  };
+  field("format").addEventListener("change", update);
+  container.querySelector("[data-browse]").addEventListener("click", () => openBrowser(field("path")));
+  update();
+  return {
+    field,
+    set(entry) {
+      field("format").value = entry.format;
+      field("path").value = entry.path;
+      if (entry.serato_root) field("serato_root").value = entry.serato_root;
+      update();
+    },
+    value() {
+      return {
+        format: field("format").value,
+        path: field("path").value.trim(),
+        access_rules: field("access_rules").value,
+        mp3_decoder: field("mp3_decoder").value,
+        serato_root: field("serato_root").value.trim() || "/",
+        read_file_tags: field("read_file_tags").checked,
+      };
+    },
+  };
+}
+
+function suggestionChips(el, onPick) {
+  el.innerHTML = state.info.suggestions.map((s, i) =>
+    `<button type="button" class="chip" data-i="${i}">${escapeHtml(state.info.formats[s.format])}: ${escapeHtml(s.path)}</button>`).join("");
+  el.onclick = (e) => {
+    const chip = e.target.closest(".chip");
+    if (chip) onPick(state.info.suggestions[Number(chip.dataset.i)]);
+  };
+}
+
 // --- setup ------------------------------------------------------------------------------
 
 async function init() {
   state.info = await api("/api/info");
-  const options = (formats) => Object.entries(formats)
-    .map(([k, v]) => `<option value="${k}">${escapeHtml(v)}</option>`).join("");
-  $("src-format").innerHTML = options(state.info.source_formats);
+  state.pickers.src = makePicker($("src-picker"), state.info.source_formats);
+  state.pickers.a = makePicker($("sync-a"), state.info.source_formats);
+  state.pickers.b = makePicker($("sync-b"), state.info.source_formats);
   $("dst-format").innerHTML = options(state.info.target_formats);
-  $("dst-format").value = "rekordbox_xml";
-  $("src-format").addEventListener("change", onSourceFormat);
-  $("dst-format").addEventListener("change", () => showFor("data-show-dst", $("dst-format").value));
-  onSourceFormat();
-  showFor("data-show-dst", $("dst-format").value);
+  $("dst-format").value = "rekordbox_usb";
 
-  $("suggestions").innerHTML = state.info.suggestions.map((s) =>
-    `<button type="button" class="chip" data-format="${s.format}" data-path="${escapeHtml(s.path)}">
-      ${escapeHtml(state.info.formats[s.format])}: ${escapeHtml(s.path)}</button>`).join("");
-  $("suggestions").addEventListener("click", (e) => {
-    const chip = e.target.closest(".chip");
-    if (!chip) return;
-    $("src-format").value = chip.dataset.format;
-    $("src-path").value = chip.dataset.path;
-    onSourceFormat();
+  suggestionChips($("suggestions"), (s) => state.pickers.src.set(s));
+  let next = "a";
+  suggestionChips($("sync-suggestions"), (s) => {
+    state.pickers[next].set(s);
+    next = next === "a" ? "b" : "a";
   });
+
+  document.querySelectorAll("[data-tab]").forEach((tab) => tab.addEventListener("click", () => {
+    document.querySelectorAll("[data-tab]").forEach((t) => t.setAttribute("aria-selected", String(t === tab)));
+    $("tab-convert").classList.toggle("hidden", tab.dataset.tab !== "convert");
+    $("tab-sync").classList.toggle("hidden", tab.dataset.tab !== "sync");
+  }));
+
+  $("dst-format").addEventListener("change", updateTarget);
+  document.querySelectorAll("input[name=dst-mode]").forEach((r) => r.addEventListener("change", updateTarget));
+  document.querySelectorAll("button[data-browse]").forEach((b) => {
+    if (b.dataset.browse) b.addEventListener("click", () => openBrowser($(b.dataset.browse)));
+  });
+  updateTarget();
 
   $("load-btn").addEventListener("click", loadLibrary);
   $("convert-btn").addEventListener("click", convert);
-  $("browse-btn").addEventListener("click", () => openBrowser($("src-path").value));
   $("upload").addEventListener("change", uploadFile);
   $("select-all").addEventListener("click", (e) => { e.preventDefault(); selectAll(true); });
   $("select-none").addEventListener("click", (e) => { e.preventDefault(); selectAll(false); });
+  $("sync-preview").addEventListener("click", () => runSync(true));
+  $("sync-run").addEventListener("click", () => runSync(false));
   let searchTimer;
   $("track-search").addEventListener("input", () => {
     clearTimeout(searchTimer);
@@ -115,15 +171,27 @@ async function init() {
   });
 }
 
-function onSourceFormat() {
-  const format = $("src-format").value;
-  $("src-hint").textContent = HINTS[format];
-  showFor("data-show", format);
+function targetMode() {
+  if ($("dst-format").value === "rekordbox_usb") return "in_place";
+  return document.querySelector("input[name=dst-mode]:checked").value;
+}
+
+function updateTarget() {
+  const format = $("dst-format").value;
+  const mode = targetMode();
+  showFor($("target-card"), "data-show-dst", format);
+  showFor($("target-card"), "data-show-mode", mode);
+  $("dst-mode-row").classList.toggle("hidden", format === "rekordbox_usb");
+  $("dst-name-label").classList.toggle("hidden", mode !== "new");
+  $("dst-path-label").classList.toggle("hidden", mode === "new");
+  $("dst-path-caption").textContent = format === "rekordbox_usb" ? "USB stick (mount point) or folder"
+    : { mixxx: "mixxxdb.sqlite to update", serato: "_Serato_ folder to update (or the drive holding it)",
+        rekordbox_xml: "rekordbox.xml to overwrite" }[format];
 }
 
 // --- file browser -----------------------------------------------------------------------
 
-async function openBrowser(start) {
+async function openBrowser(input) {
   const dialog = $("browser");
   let current = "";
   async function show(path) {
@@ -146,14 +214,15 @@ async function openBrowser(start) {
     const li = e.target.closest("li[data-path]");
     if (!li) return;
     if (li.dataset.dir === "false") {
-      $("src-path").value = li.dataset.path;
+      input.value = li.dataset.path;
       dialog.close();
     } else {
       show(li.dataset.path);
     }
   };
-  $("browser-pick").onclick = () => { if (current) { $("src-path").value = current; dialog.close(); } };
-  const startDir = start && !start.match(/\.(xml|sqlite)$|database V2$/) ? start : start.replace(/\/[^/]*$/, "");
+  $("browser-pick").onclick = () => { if (current) { input.value = current; dialog.close(); } };
+  const start = input.value;
+  const startDir = start && !/\.(xml|sqlite|db|pdb)$|database V2$/.test(start) ? start : start.replace(/\/[^/]*$/, "");
   await show(startDir || "");
   dialog.showModal();
 }
@@ -167,11 +236,8 @@ async function uploadFile() {
   form.append("file", file);
   try {
     const result = await api("/api/upload", { method: "POST", body: form });
-    $("src-path").value = result.path;
-    if (/\.xml$/i.test(file.name)) $("src-format").value = "rekordbox_xml";
-    else if (/\.sqlite$/i.test(file.name)) $("src-format").value = "mixxx";
-    else if (/\.zip$/i.test(file.name)) $("src-format").value = "serato";
-    onSourceFormat();
+    const format = /\.xml$/i.test(file.name) ? "rekordbox_xml" : /\.sqlite$/i.test(file.name) ? "mixxx" : "serato";
+    state.pickers.src.set({ format, path: result.path });
     setStatus(status, `Uploaded ${file.name}.`);
   } catch (err) {
     setStatus(status, `Upload failed: ${err.message}`, true);
@@ -186,14 +252,7 @@ async function loadLibrary() {
   button.disabled = true;
   setStatus(status, "Loading…");
   try {
-    const { job_id } = await post("/api/inspect", {
-      format: $("src-format").value,
-      path: $("src-path").value.trim(),
-      access_rules: $("access-rules").value,
-      mp3_decoder: $("src-mp3").value,
-      serato_root: $("src-serato-root").value.trim() || "/",
-      read_file_tags: $("src-read-tags").checked,
-    });
+    const { job_id } = await post("/api/inspect", state.pickers.src.value());
     const result = await waitForJob(job_id, status);
     state.library = result;
     setStatus(status, `Loaded ${result.source}.`);
@@ -225,8 +284,7 @@ function renderLibrary(lib) {
   $("tree").onchange = (e) => {
     const box = e.target;
     if (box.type !== "checkbox") return;
-    const li = box.closest("li");
-    li.querySelectorAll("input[type=checkbox]").forEach((b) => { b.checked = box.checked; });
+    box.closest("li").querySelectorAll("input[type=checkbox]").forEach((b) => { b.checked = box.checked; });
     collectSelection();
   };
   $("folders").innerHTML = lib.folders.map((f) =>
@@ -234,11 +292,6 @@ function renderLibrary(lib) {
   $("library-card").classList.remove("hidden");
   $("target-card").classList.remove("hidden");
   $("result-card").classList.add("hidden");
-  const src = $("src-format").value;
-  if ($("dst-format").value === src) {
-    $("dst-format").value = Object.keys(state.info.target_formats).find((f) => f !== src);
-    showFor("data-show-dst", $("dst-format").value);
-  }
   showTracks("");
 }
 
@@ -294,31 +347,46 @@ function formatTrack(t) {
 
 // --- convert ----------------------------------------------------------------------------
 
+function writeOptions(format) {
+  return {
+    format,
+    key_notation: $("dst-key").value,
+    mp3_decoder: format === "mixxx" ? $("dst-mp3").value : state.pickers.src.value().mp3_decoder,
+    memory_cues_to_hot_cues: $("dst-mem-to-hot").checked,
+    rekordbox_memory_cues: $("dst-rb-memory").checked,
+    rekordbox_hot_cues_as_memory: $("dst-rb-hot-as-memory").checked,
+    serato_root: $("dst-serato-root").value.trim() || "/",
+    serato_write_tags: $("dst-serato-tags").checked,
+    serato_max_hot_cues: Number($("dst-serato-cues").value),
+    serato_base_database: $("dst-serato-base").value.trim(),
+    mixxx_base_database: $("dst-mixxx-base").value.trim(),
+    mixxx_playlists_as_crates: $("dst-mixxx-crates").checked,
+    copy_missing: format === "serato" ? $("dst-serato-copy").checked : $("dst-copy").checked,
+    waveforms: $("dst-waveforms").checked,
+    device_name: $("dst-device").value.trim(),
+    onelibrary: $("dst-onelibrary").value,
+  };
+}
+
 async function convert() {
   const status = $("convert-status");
   const button = $("convert-btn");
   const format = $("dst-format").value;
+  const mode = targetMode();
   if (format === "serato" && $("dst-serato-tags").checked &&
       !confirm("This writes Serato cue and grid tags into your audio files. Continue?")) return;
+  if (mode === "in_place" && format !== "rekordbox_usb" &&
+      !confirm("This updates the library in place (a backup is made first). Is the DJ software closed?")) return;
   button.disabled = true;
   setStatus(status, "Converting…");
   try {
     const { job_id } = await post("/api/convert", {
+      ...writeOptions(format),
       library_id: state.library.library_id,
-      format,
       output_name: $("dst-name").value.trim() || "converted",
       path_rules: $("path-rules").value,
-      key_notation: $("dst-key").value,
-      mp3_decoder: format === "mixxx" ? $("dst-mp3").value : $("src-mp3").value,
-      memory_cues_to_hot_cues: $("dst-mem-to-hot").checked,
-      rekordbox_memory_cues: $("dst-rb-memory").checked,
-      rekordbox_hot_cues_as_memory: $("dst-rb-hot-as-memory").checked,
-      serato_root: $("dst-serato-root").value.trim() || "/",
-      serato_write_tags: $("dst-serato-tags").checked,
-      serato_max_hot_cues: Number($("dst-serato-cues").value),
-      serato_base_database: $("dst-serato-base").value.trim(),
-      mixxx_base_database: $("dst-mixxx-base").value.trim(),
-      mixxx_playlists_as_crates: $("dst-mixxx-crates").checked,
+      in_place: mode === "in_place",
+      target_path: $("dst-path").value.trim(),
       playlists: [...state.selected],
     });
     const result = await waitForJob(job_id, status);
@@ -335,14 +403,74 @@ function renderResult(result) {
   const s = result.summary;
   $("result-stats").innerHTML = stat("tracks", s.tracks) + stat("playlists", s.playlists) +
     stat("hot cues", s.hot_cues) + stat("memory cues & loops", s.memory_cues) + stat("with beat grid", s.gridded);
-  const outName = result.output_dir.split("/").pop();
-  $("result-files").innerHTML = `<p>Written to <code>${escapeHtml(result.output_dir)}</code>:</p><div class="files">` +
-    result.files.map((f) => `<a href="/api/download?path=${encodeURIComponent(f)}">${escapeHtml(f)}</a>`).join("") +
-    `<a href="/api/download?path=${encodeURIComponent(outName)}"><b>Download all (.zip)</b></a></div>`;
+  const files = result.files.map((f) => f.download
+    ? `<a href="/api/download?path=${encodeURIComponent(f.download)}">${escapeHtml(f.download)}</a>`
+    : `<code>${escapeHtml(f.path)}</code>`).join(" ");
+  const zip = result.zip ? `<a href="/api/download?path=${encodeURIComponent(result.zip)}"><b>Download all (.zip)</b></a>` : "";
+  $("result-files").innerHTML = `<p>Written to <code>${escapeHtml(result.output_dir)}</code>:</p><div class="files">${files} ${zip}</div>`;
   $("result-warnings").innerHTML = result.warnings.map((w) => `<li>${escapeHtml(w)}</li>`).join("");
   $("next-steps").innerHTML = NEXT_STEPS[result.format] || "";
   $("result-card").classList.remove("hidden");
   $("result-card").scrollIntoView({ behavior: "smooth" });
+}
+
+// --- sync -------------------------------------------------------------------------------
+
+async function runSync(dryRun) {
+  const status = $("sync-status");
+  const a = state.pickers.a.value();
+  const b = state.pickers.b.value();
+  if (!a.path || !b.path) { setStatus(status, "Choose both libraries.", true); return; }
+  if (!dryRun && !confirm("Sync updates the libraries in place (each changed file is backed up first). Is the DJ software closed?")) return;
+  for (const btn of [$("sync-preview"), $("sync-run")]) btn.disabled = true;
+  setStatus(status, dryRun ? "Comparing…" : "Syncing…");
+  try {
+    const { job_id } = await post("/api/sync", {
+      a, b,
+      direction: $("sync-direction").value,
+      prefer: $("sync-prefer").value,
+      cues: $("sync-cues").value,
+      grids: $("sync-grids").value,
+      metadata: $("sync-metadata").value,
+      playlists: $("sync-playlists").value,
+      add_tracks: $("sync-add").checked,
+      path_rules: $("sync-rules").value,
+      dry_run: dryRun,
+      write: {
+        format: "mixxx",
+        serato_write_tags: $("sync-serato-tags").checked,
+        waveforms: $("sync-waveforms").checked,
+        onelibrary: $("sync-onelibrary").value,
+      },
+    });
+    const result = await waitForJob(job_id, status);
+    setStatus(status, dryRun ? "Preview ready — nothing was changed." : "Done.");
+    renderSync(result);
+  } catch (err) {
+    setStatus(status, err.message, true);
+  } finally {
+    for (const btn of [$("sync-preview"), $("sync-run")]) btn.disabled = false;
+  }
+}
+
+function renderSync(result) {
+  const parts = [];
+  for (const [key, label] of [["a_to_b", "A → B"], ["b_to_a", "B → A"]]) {
+    const side = result[key];
+    if (!side) continue;
+    const r = side.report;
+    const by = Object.entries(r.matched_by).map(([k, v]) => `${v} by ${k}`).join(", ");
+    parts.push(`<h3>${label}</h3><div class="stats">${stat("matched", r.matched)}${stat(result.dry_run ? "would add" : "added", r.added)}` +
+      `${stat(result.dry_run ? "would update" : "updated", r.updated)}${stat("new playlists", r.playlists_added)}` +
+      `${stat("changed playlists", r.playlists_updated)}</div>` +
+      (by ? `<p class="hint">Matched ${escapeHtml(by)}.</p>` : "") +
+      (r.details.length ? `<details><summary>${r.details.length} change(s)</summary><ul>${r.details.map((d) => `<li>${escapeHtml(d)}</li>`).join("")}</ul></details>` : "") +
+      (side.written ? `<ul class="warnings">${side.written.warnings.map((w) => `<li>${escapeHtml(w)}</li>`).join("")}</ul>` : ""));
+  }
+  $("sync-result-title").textContent = result.dry_run ? "Preview" : "Result";
+  $("sync-report").innerHTML = parts.join("");
+  $("sync-result").classList.remove("hidden");
+  $("sync-result").scrollIntoView({ behavior: "smooth" });
 }
 
 init().catch((err) => setStatus($("load-status"), `Could not start: ${err.message}`, true));
