@@ -67,8 +67,8 @@ uv run djconvert convert --help                               # every option
 **Hot-plugging.** The *USB drives* panel at the top of the web UI lists every drive mounted under
 `USB_DIR`, what's on it (Rekordbox, Serato, nothing yet), its filesystem and free space, and
 updates within 3 s of a stick being plugged in or pulled out, with buttons to open it, sync it or
-write a library onto it. It warns about exFAT/NTFS sticks (players up to the CDJ-2000NXS2 only
-read FAT32) and read-only mounts.
+write a library onto it. It warns about NTFS sticks (rekordbox won't write to them), exFAT sticks
+headed for older players (up to the CDJ-2000NXS2 only read FAT32) and read-only mounts.
 
 This needs the host's mounts to reach the container: compose bind-mounts `USB_DIR` with `rslave`
 propagation, so a stick your desktop auto-mounts after the container started appears inside it
@@ -78,6 +78,43 @@ run `sudo mount --make-rshared /` (or set `USB_MOUNT_MODE=rw` and restart the co
 plugging a stick in). On macOS, Docker Desktop shares `/Volumes` as a folder rather than as
 mounts; sticks that already hold a Rekordbox or Serato library are still found there, but a blank
 stick only shows up in the file browser.
+
+**Convert a stick in one go.** Plug the stick in, and under *Convert drive* press *Convert to
+Rekordbox* or *Convert to Serato* (CLI: none yet; the web UI and `/api/drives/convert`). It:
+
+1. backs up the stick's library folders (`PIONEER`, `_Serato_`) and, for every audio file whose
+   Serato tags will change, the original tag values, to `BACKUP_DIR` (default `exports/backups`);
+   tick *Full backup* to copy the whole stick instead. It checks there's room first;
+2. reads the library on the stick and writes the other format onto the same stick, pointing at
+   the audio already there (nothing is copied unless a format has to be transcoded, e.g. Ogg to MP3
+   for Rekordbox), with cues and grids moved for each program's MP3 timing;
+3. keeps the original library by default, so the stick works in both programs; untick *Keep the
+   original* to remove it.
+
+*Restore* on a backup puts the stick back as it was: library folders, Serato tags, and files the
+conversion added removed. Nothing reformats or re-images the drive: each program only reads its
+own library files, so rewriting those (byte for byte as that program writes them, for Rekordbox)
+is the whole conversion, and the audio stays untouched.
+
+**DDJ-400 / DDJ-FLX4 (the stick goes into the laptop).** These controllers have no USB port for a
+stick, so what matters is what the laptop software does with it:
+
+- **Mixxx** reads a stick's Rekordbox library (`export.pdb`, not OneLibrary) and plays straight from
+  it, with hot cues, memory cues and the beat grid. It looks for sticks under `/media`,
+  `/media/$USER`, `/run/media/$USER` and `/Volumes` (not `/mnt`).
+- **Serato DJ Lite** (free with both controllers) shows a stick's `_Serato_` crates and plays from
+  it. Lite has 4 hot cues per deck; cues 5–8 are kept but not shown. Serato DJ Pro/Lite 4.x moved to
+  a new database; whether it picks up a stick's legacy `_Serato_` folder is unverified.
+- **rekordbox** on a laptop shows a stick under *Devices* in Export mode but can't play from it in
+  Performance mode: you import its playlists into your collection. Every Rekordbox stick this tool
+  writes also gets a `rekordbox.xml` at its root for that; in rekordbox, add it under *Preferences
+  → Advanced → rekordbox xml* and import the playlists from the *rekordbox xml* tree, which brings
+  cues and grids with them. Set *rekordbox.xml paths* (e.g. `E:/` on Windows, `/Volumes/STICK` on a
+  Mac) to how the laptop sees the stick, since the container sees it somewhere else. rekordbox 7
+  deletes the play history from a stick after importing it unless you turn that off in its
+  preferences.
+- Format sticks **exFAT** (or FAT32 if they also go into older CDJs). Avoid NTFS: rekordbox won't
+  write to it and macOS only reads it.
 
 **Rekordbox (CDJ/XDJ).** Writing a stick builds `PIONEER/rekordbox/export.pdb` and, per track, the
 `.DAT`/`.EXT`/`.2EX` analysis files (beat grid, hot and memory cues with names and colours,

@@ -96,13 +96,21 @@ def _drive(path: Path, fstype: str = "", device: str = "") -> Drive:
         drive.notes.append(
             "Not writable here: check USB_MOUNT_MODE and that the container runs as your user."
         )
-    if fstype and fstype not in _OLD_PLAYER_OK and fstype not in ("tmpfs", "fuseblk", ""):
+    if fstype in ("ntfs", "ntfs3"):
         drive.notes.append(
-            f"Formatted {fstype}: CDJ-2000NXS2 and older players only read FAT32 (the CDJ-3000 also reads exFAT)."
+            "NTFS: rekordbox won't write to it, macOS only reads it, and no player reads it. Use exFAT (laptop only) or FAT32."
         )
-    if fstype == "fuseblk":
+    elif fstype == "fuseblk":
         drive.notes.append(
-            "A FUSE filesystem (often exFAT or NTFS): older players only read FAT32."
+            "A FUSE filesystem (often exFAT or NTFS): if it's NTFS, reformat it; exFAT is fine on a laptop, but CDJ-2000NXS2 and older players only read FAT32."
+        )
+    elif fstype == "exfat":
+        drive.notes.append(
+            "exFAT: fine on a laptop (DDJ-400/FLX4) and the CDJ-3000, but CDJ-2000NXS2 and older players only read FAT32."
+        )
+    elif fstype and fstype not in _OLD_PLAYER_OK and fstype not in ("tmpfs", ""):
+        drive.notes.append(
+            f"Formatted {fstype}: Windows and macOS laptops may not read it, and players only read FAT32 (the CDJ-3000 also reads exFAT)."
         )
     return drive
 
