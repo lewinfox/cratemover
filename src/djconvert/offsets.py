@@ -1,4 +1,4 @@
-"""Decoder offsets between Mixxx and the reference timeline (Rekordbox / Serato).
+"""Decoder offsets between each program and the reference timeline (Rekordbox's).
 
 Mixxx skips some leading audio that Rekordbox and Serato play (MP3 encoder
 delay depending on the LAME/Xing header, AAC priming samples), so a cue at the
@@ -28,9 +28,10 @@ MP3_DECODERS: tuple[Mp3Decoder, ...] = ("MAD", "CoreAudio", "FFmpeg")
 # Offset per Mixxx MP3 decoder and header case (ms):
 #   A: no Xing/Info header, B: Xing without LAME tag,
 #   C: LAME tag without a valid music CRC, D: LAME tag with CRC.
+# Mixxx's own Rekordbox importer (src/library/rekordbox/rekordboxfeature.cpp) uses these.
 _MP3_OFFSETS: dict[str, dict[str, float]] = {
     "MAD": {"A": 26, "D": 26},
-    "CoreAudio": {"A": 13, "B": 11, "C": 26, "D": 50},
+    "CoreAudio": {"A": 12, "B": 13, "C": 26, "D": 50},
     "FFmpeg": {"D": 26},
 }
 
@@ -155,8 +156,29 @@ def mp4_priming_ms(path: Path) -> float:
     raise ValueError("no audio track")
 
 
+def serato_offset_ms(path: Path | None, extension: str) -> float:
+    """Milliseconds Serato places MP3 cues later than Rekordbox (Serato = reference + this).
+
+    Mixxx's two importers disagree by exactly one MPEG frame for MP3s with a
+    Xing/Info header but no valid LAME tag (cases B and C): with MAD, Mixxx is
+    26 ms behind Serato for every MP3 (24 ms at 48 kHz; ``src/track/serato/tags.cpp``)
+    but behind Rekordbox only for cases A and D (``rekordboxfeature.cpp``).
+    So Serato counts that Info frame and Rekordbox doesn't.
+    """
+    if extension != "mp3" or path is None:
+        return 0.0
+    try:
+        if mp3_header_case(path) not in ("B", "C"):
+            return 0.0
+        with open(path, "rb") as f:
+            rate = _first_frame(f).sample_rate
+        return 1152 * 1000.0 / rate
+    except Exception:
+        return 0.0
+
+
 def mixxx_offset_ms(path: Path | None, extension: str, decoder: Mp3Decoder = "MAD") -> Offset:
-    """Milliseconds to add to Mixxx positions to reach the Rekordbox/Serato timeline."""
+    """Milliseconds to add to Mixxx positions to reach the reference (Rekordbox) timeline."""
     if extension in ("m4a", "mp4", "aac"):
         if path is None:
             return Offset(FALLBACK_MP4_OFFSET_MS, "file not found; assumed standard AAC priming")

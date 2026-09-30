@@ -168,3 +168,19 @@ def test_serato_sample_rate_text() -> None:
         48000,
         0,
     ]
+
+
+def test_serato_mp3_frame_offset(library_copy: Path, tmp_path: Path) -> None:
+    """ffmpeg's MP3s have an Info header without a LAME tag: Serato counts that frame."""
+    from djconvert.offsets import mp3_header_case, serato_offset_ms
+    from djconvert.serato.tags import read_tags
+
+    mp3 = library_copy / "music" / "Alpha - First Light.mp3"
+    assert mp3_header_case(mp3) == "B"
+    assert serato_offset_ms(mp3, "mp3") == pytest.approx(1152000 / 44100)
+    source = read_library(ReadOptions("mixxx", str(library_copy / "mixxx")))
+    write_library(source, WriteOptions("serato", str(tmp_path), serato_write_tags=True), [])
+    raw = {c.index: c.position_ms for c in read_tags(mp3).markers.cues}
+    assert raw[0] == 250 + 26  # hot cue A at 0.25 s in the reference timeline
+    back = _by_title(read_library(ReadOptions("serato", str(tmp_path))))["First Light"]
+    assert round(back.hot_cues[0].position_ms) == 250  # and back again

@@ -12,6 +12,7 @@ audio files' tags (:mod:`djconvert.serato.tags`).
 
 from __future__ import annotations
 
+import copy
 import re
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -27,6 +28,7 @@ from ..colours import (
 )
 from ..keys import KeyNotation, format_key, parse_key
 from ..model import Cue, CueRole, Library, Playlist, TempoMarker, Track, normalise_path
+from ..offsets import serato_offset_ms
 from .binfile import CRATE_VERSION, DATABASE_VERSION, Field, SeratoFormatError, dump, parse
 from .markers import GridMarker, Markers2, SeratoCue, SeratoLoop
 from .tags import SUPPORTED, read_tags, write_tags
@@ -254,6 +256,8 @@ def _read_file_tags(library: Library, resolve: Resolver, progress: Callable[[str
             continue
         track.cues = cues_from_serato(tags.markers)
         track.grid = grid_from_serato(tags.grid)
+        if shift := serato_offset_ms(local, track.extension):
+            _move(track, -shift)
         if tags.markers.bpm_locked is not None:
             track.bpm_locked = tags.markers.bpm_locked
         if track.colour is None and tags.markers.track_colour is not None:
@@ -264,6 +268,21 @@ def _read_file_tags(library: Library, resolve: Resolver, progress: Callable[[str
         )
     if unreadable:
         library.warnings.append(f"{unreadable} track file(s) had unreadable Serato tags.")
+
+
+def _move(track: Track, ms: float) -> None:
+    for cue in track.cues:
+        cue.position_ms += ms
+        if cue.end_ms is not None:
+            cue.end_ms += ms
+    for marker in track.grid:
+        marker.position_ms += ms
+
+
+def _moved(track: Track, ms: float) -> Track:
+    moved = copy.deepcopy(track)
+    _move(moved, ms)
+    return moved
 
 
 def _place_crate(root: Playlist, names: list[str], track_ids: list[str]) -> None:
@@ -523,11 +542,14 @@ def _write_file_tags(
                 f"{track.display_name}: Serato tags not supported for this file type"
             )
             continue
-        markers, notes = markers_for_track(track, options)
+        # Serato's timeline is one MPEG frame later than the reference on some MP3s.
+        shift = serato_offset_ms(local, track.extension)
+        placed = _moved(track, shift) if shift else track
+        markers, notes = markers_for_track(placed, options)
         if notes:
             dropped += 1
         try:
-            write_tags(local, markers, grid_to_serato(track.grid))
+            write_tags(local, markers, grid_to_serato(placed.grid))
             result.tags_written += 1
         except Exception as exc:
             result.warnings.append(f"{track.display_name}: could not write tags: {exc}")
