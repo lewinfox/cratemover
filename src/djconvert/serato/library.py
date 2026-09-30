@@ -98,6 +98,12 @@ def _number(text: str) -> float:
         return 0.0
 
 
+def _sample_rate(text: str) -> int:
+    """``tsmp`` is text such as ``44100``, ``44.1`` or ``44.1k``."""
+    value = _number(text)
+    return round(value * 1000) if 0 < value < 1000 else int(value)
+
+
 def cues_from_serato(markers: Markers2) -> list[Cue]:
     cues = [
         Cue(
@@ -161,9 +167,7 @@ def _track_from_fields(fields: Field, volume_root: str, index: int) -> Track | N
         year=_text(fields, "ttyr"),
         track_number=int(track_number) if track_number.isdigit() else None,
         duration_s=_duration(_text(fields, "tlen")),
-        sample_rate=int(
-            _number(_text(fields, "tsmp")) * (1000 if "k" in _text(fields, "tsmp") else 1)
-        ),
+        sample_rate=_sample_rate(_text(fields, "tsmp")),
         bitrate=int(_number(_text(fields, "tbit"))),
         bpm=_number(_text(fields, "tbpm")),
         bpm_locked=bool(fields.get("bbgl")),
