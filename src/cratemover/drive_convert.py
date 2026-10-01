@@ -38,6 +38,23 @@ from .offsets import Mp3Decoder
 from .pioneer.usb import OneLibraryMode
 
 Progress = Callable[[str], None]
+
+
+def _steps(progress: Progress, total: int) -> None:
+    """A per-file step of ``total`` files starts. A progress callback with ``steps`` and
+    ``tick`` methods (the CLI's) draws a progress bar; others get messages instead."""
+    steps = getattr(progress, "steps", None)
+    if steps is not None:
+        steps(total)
+
+
+def _tick(progress: Progress) -> None:
+    """One file of the current step done."""
+    tick = getattr(progress, "tick", None)
+    if tick is not None:
+        tick()
+
+
 LIBRARY_DIRS = ("PIONEER", ".PIONEER", "_Serato_")
 TARGETS = (Format.REKORDBOX_USB, Format.SERATO)
 
@@ -156,9 +173,11 @@ def backup_drive(
         )
     dest.mkdir()
     progress(f"Backing up {len(files)} file(s) ({need / 1e6:.0f} MB)")
+    _steps(progress, len(files))
     checksums = {}
     for n, rel in enumerate(files, 1):
-        if n % 100 == 0:
+        _tick(progress)
+        if n % 100 == 0 and not hasattr(progress, "tick"):
             progress(f"Backing up {n}/{len(files)}")
         target = dest / "files" / rel
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -219,9 +238,12 @@ def restore_drive(backup: Path, root: Path, progress: Progress = print) -> list[
     if removed:
         done.append(f"removed {removed} file(s) the conversion had added")
     progress(f"Restoring {len(checksums)} file(s)")
+    _steps(progress, len(checksums))
     for rel in checksums:
+        _tick(progress)
         (root / rel).parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(files / rel, root / rel)
+    progress("Checking the restored files")
     wrong = [rel for rel, digest in checksums.items() if _sha256(root / rel) != digest]
     if wrong:
         raise OSError(
@@ -275,8 +297,6 @@ def convert_drive(
     library = read_library(read, progress)
 
     notes = cue_changes(library, target)
-    for note in notes:
-        progress(f"Note: {note}")
 
     # 1. Back up to the computer: the library folder and all its audio, byte for byte.
     audio = sorted(
@@ -365,7 +385,9 @@ def relocate(root: Path, library: Library, target: Format, progress: Progress) -
         local[tid]: root / rel for tid, rel in wanted.items() if root / rel != local[tid]
     }  # one entry per file, even when several tracks share it
     if moves:
-        progress(f"Moving {len(moves)} audio file(s) into {target.replace('_', ' ')}'s layout")
+        name = {Format.REKORDBOX_USB: "Rekordbox", Format.SERATO: "Serato"}[target]
+        progress(f"Moving {len(moves)} audio file(s) into {name}'s layout")
+        _steps(progress, len(moves))
         staging = root / STAGING
         staging.mkdir()
         staged = []
@@ -373,6 +395,7 @@ def relocate(root: Path, library: Library, target: Format, progress: Progress) -
             os.rename(old, staging / str(n))
             staged.append((staging / str(n), new))
         for temp, new in staged:
+            _tick(progress)
             new.parent.mkdir(parents=True, exist_ok=True)
             os.rename(temp, new)
         staging.rmdir()

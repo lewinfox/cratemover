@@ -1,4 +1,4 @@
-"""Command line: ``cratemover inspect``, ``convert``, ``sync`` and ``serve``."""
+"""Command line: ``cratemover inspect``, ``convert``, ``sync``, ``convert-usb``, ``restore-usb``, ``keys`` and ``serve``."""
 
 from __future__ import annotations
 
@@ -7,9 +7,18 @@ import json
 import sys
 import time
 from pathlib import Path
+from typing import Any
 
 from rich import box
-from rich.console import Console
+from rich.console import Console, Group
+from rich.panel import Panel
+from rich.progress import (
+    BarColumn,
+    MofNCompleteColumn,
+    Progress,
+    TextColumn,
+    TimeRemainingColumn,
+)
 from rich.table import Table
 from rich.text import Text
 
@@ -184,20 +193,97 @@ def _print_keys(chosen: str | None) -> int:
     return 0
 
 
-def _note(message: str) -> None:
-    """A warning that isn't an error, in yellow."""
-    line = f"⚠ {message}"
-    if sys.stdout.isatty():
-        line = f"\033[33m{line}\033[0m"
-    print(line)
+class _Log:
+    """Timestamped progress lines, and a progress bar for each per-file step (``steps`` then
+    ``tick`` per file), so a long step on a big stick visibly moves."""
+
+    def __init__(self) -> None:
+        self.console = Console(stderr=True, highlight=False)
+        self.bar: Progress | None = None
+        self.task: Any = None
+
+    def __call__(self, message: str) -> None:
+        self.done()
+        self.console.print(Text.assemble((time.strftime("%H:%M:%S"), "dim"), "  ", message))
+
+    def steps(self, total: int) -> None:
+        self.done()
+        self.bar = Progress(
+            TextColumn("          "),
+            BarColumn(bar_width=40),
+            MofNCompleteColumn(),
+            TimeRemainingColumn(),
+            console=self.console,
+            transient=False,
+        )
+        self.task = self.bar.add_task("", total=total)
+        self.bar.start()
+
+    def tick(self) -> None:
+        if self.bar is not None:
+            self.bar.advance(self.task)
+
+    def done(self) -> None:
+        if self.bar is not None:
+            self.bar.stop()
+            self.bar = None
 
 
-def _outcome(ok: bool, message: str) -> None:
-    """A last line that stands out: green for success, red for failure."""
-    line = f"{'✔' if ok else '✘'} {message}"
-    if sys.stdout.isatty():
-        line = f"\033[1;{32 if ok else 31}m{line}\033[0m"
-    print(f"\n{line}")
+FORMAT_NAMES = {Format.REKORDBOX_USB: "Rekordbox", Format.SERATO: "Serato"}
+USB_TARGETS = {"rekordbox": Format.REKORDBOX_USB, "serato": Format.SERATO}  # convert-usb --to
+
+
+def _drive_formats(drive: Path) -> list[Format]:
+    from .devices import _libraries
+
+    return [Format(lib["format"]) for lib in _libraries(drive)] if drive.is_dir() else []
+
+
+def _converted(drive: str, source: Format | None, target: Format, result: Any) -> None:
+    """A summary of a stick conversion: what's on it now, what moved, where the backup is,
+    and anything worth knowing (in yellow)."""
+    summary = result.written.get(target, {}).get("summary", {})
+    facts = Table.grid(padding=(0, 2))
+    facts.add_column(style="dim", no_wrap=True)
+    facts.add_column(overflow="fold")
+    names = f"{FORMAT_NAMES.get(source, source or '?')} → {FORMAT_NAMES[target]}"
+    facts.add_row("Library", names + f"  (removed {', '.join(result.removed) or 'nothing'})")
+    facts.add_row(
+        "Tracks",
+        f"{summary.get('tracks', 0)} in {summary.get('playlists', 0)} playlist(s), "
+        f"{summary.get('hot_cues', 0) + summary.get('memory_cues', 0)} cue(s), "
+        f"{summary.get('gridded', 0)} beat grid(s)",
+    )
+    facts.add_row(
+        "Audio",
+        f"{len(result.moved)} file(s) moved into {FORMAT_NAMES[target]}'s layout"
+        if result.moved
+        else "left where it was",
+    )
+    facts.add_row(
+        "Checked",
+        f"every track, cue and beat matches the source (fingerprint {result.fingerprint[:12]})",
+    )
+    facts.add_row("Backup", result.backup)
+    parts: list[Any] = [facts]
+    for line in result.warnings:
+        parts.append(Text(f"• {line}", style="dim"))
+    for note in result.notes:
+        parts.append(Text(f"⚠ {note}", style="yellow"))
+    Console().print(
+        Panel(
+            Group(*parts),
+            title=f"✔ Converted {Path(drive).name} to {FORMAT_NAMES[target]}",
+            title_align="left",
+            border_style="green",
+        )
+    )
+
+
+def _failed(title: str, details: str) -> None:
+    lines = [line for line in details.splitlines() if line.strip()]
+    body = Group(*(Text(line, style="red" if line.startswith("- ") else "") for line in lines))
+    Console().print(Panel(body, title=f"✘ {title}", title_align="left", border_style="red"))
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -283,17 +369,14 @@ def main(argv: list[str] | None = None) -> int:
     _add_usb_args(sync)
 
     drive = sub.add_parser(
-        "convert-drive",
+        "convert-usb",
         help="replace a USB stick's library with the other format, in place",
         description="Back the stick's library and music up to this computer byte for byte, "
         "replace the library with the other format, check the result exactly, and restore the "
         "backup if the check fails.",
     )
     drive.add_argument("drive", help="the stick's mount point, e.g. /media/me/STICK")
-    drive.add_argument(
-        "--to", dest="target_format", required=True, type=Format,
-        choices=[Format.REKORDBOX_USB, Format.SERATO],
-    )  # fmt: skip
+    drive.add_argument("--to", dest="target_name", required=True, choices=list(USB_TARGETS))
     drive.add_argument(
         "--backup-dir", default="export/backups", help="where the backup goes (on this computer)"
     )
@@ -306,8 +389,8 @@ def main(argv: list[str] | None = None) -> int:
         "--mp3-decoder", type=Mp3Decoder, choices=list(Mp3Decoder), default=Mp3Decoder.MAD
     )
 
-    restore = sub.add_parser("restore-drive", help="put a stick back as a backup has it")
-    restore.add_argument("backup", help="a backup folder made by convert-drive")
+    restore = sub.add_parser("restore-usb", help="put a stick back as a backup has it")
+    restore.add_argument("backup", help="a backup folder made by convert-usb")
     restore.add_argument("drive", help="the stick's mount point")
 
     keys = sub.add_parser(
@@ -342,13 +425,13 @@ def main(argv: list[str] | None = None) -> int:
         uvicorn.run("cratemover.web.server:app", host=args.host, port=args.port)
         return 0
 
-    def progress(message: str) -> None:
-        print(f"{time.strftime('%H:%M:%S')}  {message}", file=sys.stderr)
+    progress = _Log()
 
-    if args.command == "convert-drive":
+    if args.command == "convert-usb":
         from .drive_convert import DriveConvertOptions, convert_drive
 
-        name = {Format.REKORDBOX_USB: "Rekordbox", Format.SERATO: "Serato"}[args.target_format]
+        args.target_format = USB_TARGETS[args.target_name]
+        source = next(iter(_drive_formats(Path(args.drive))), None)
         try:
             result = convert_drive(
                 Path(args.drive),
@@ -363,28 +446,28 @@ def main(argv: list[str] | None = None) -> int:
                 progress,
             )
         except (ValueError, OSError) as exc:
-            print(str(exc), file=sys.stderr)
-            _outcome(False, f"NOT CONVERTED: {args.drive} was left (or put back) as it was")
+            progress.done()
+            _failed(
+                f"Not converted: {args.drive} was left (or put back) as it was",
+                str(exc),
+            )
             return 1
-        for warning in result.warnings:
-            progress(warning)
-        progress(f"Backup: {result.backup}")
-        for note in result.notes:
-            _note(note)
-        _outcome(True, f"CONVERTED {args.drive} to {name}, checked track by track")
+        progress.done()
+        _converted(args.drive, source, args.target_format, result)
         return 0
 
-    if args.command == "restore-drive":
+    if args.command == "restore-usb":
         from .drive_convert import restore_drive
 
         try:
-            for line in restore_drive(Path(args.backup), Path(args.drive), progress):
-                progress(line)
+            done = restore_drive(Path(args.backup), Path(args.drive), progress)
         except OSError as exc:
-            print(str(exc), file=sys.stderr)
-            _outcome(False, f"RESTORE FAILED: {args.drive} doesn't match the backup")
+            _failed(f"Restore failed: {args.drive} doesn't match the backup", str(exc))
             return 1
-        _outcome(True, f"RESTORED {args.drive}: every file matches the backup")
+        body = Text("\n".join(done))
+        Console().print(
+            Panel(body, title=f"✔ Restored {args.drive}", title_align="left", border_style="green")
+        )
         return 0
 
     if args.command == "sync":
