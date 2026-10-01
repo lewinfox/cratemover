@@ -8,6 +8,11 @@ import sys
 import time
 from pathlib import Path
 
+from rich import box
+from rich.console import Console
+from rich.table import Table
+from rich.text import Text
+
 from .convert import (
     SOURCE_FORMATS,
     SYNC_FORMATS,
@@ -19,8 +24,8 @@ from .convert import (
     sync_libraries,
     write_library,
 )
-from .keys import KeyNotation
-from .model import Format
+from .keys import KeyNotation, format_key, parse_key
+from .model import Format, Key
 from .offsets import Mp3Decoder
 from .paths import parse_rules
 from .pioneer.usb import OneLibraryMode
@@ -80,6 +85,103 @@ def _add_usb_args(parser: argparse.ArgumentParser) -> None:
         default=OneLibraryMode.AUTO,
     )
     parser.add_argument("--device-name", default="")
+
+
+_SHARPS = {1: "C#", 3: "D#", 6: "F#", 8: "G#", 10: "A#"}
+_FLATS = {1: "Db", 3: "Eb", 6: "Gb", 8: "Ab", 10: "Bb"}
+
+
+def _spellings(key: Key) -> str:
+    """A key's musical name, with both spellings on the black notes (Abm/G#m)."""
+    suffix = "m" if key.minor else ""
+    if key.tonic in _SHARPS:
+        return f"{_FLATS[key.tonic]}{suffix}/{_SHARPS[key.tonic]}{suffix}"
+    return format_key(key, KeyNotation.MUSICAL)
+
+
+def _camelot(number: int, minor: bool) -> Key:
+    key = parse_key(f"{(number - 1) % 12 + 1}{'A' if minor else 'B'}")
+    assert key is not None
+    return key
+
+
+# How `keys` highlights a key and the keys that mix with it.
+KEY_STYLES = {
+    "key": "bold black on white",
+    "next": "bold black on green3",
+    "further": "black on dark_orange",
+}
+
+
+def keys_table(key: Key | None) -> Table:
+    """The Camelot wheel as a table, with musical and Open Key names. With a key: it, the keys
+    next to it on the wheel (a fifth either way, or the relative major/minor) and the keys a
+    step further (two fifths, or the relative's neighbours) are highlighted."""
+    marks: dict[Key, str] = {}
+    if key is not None:
+        number, minor = int(format_key(key, KeyNotation.CAMELOT)[:-1]), key.minor
+        for d, other in ((-1, False), (1, False), (0, True)):
+            marks[_camelot(number + d, minor ^ other)] = "next"
+        for d, other in ((-2, False), (2, False), (-1, True), (1, True)):
+            marks[_camelot(number + d, minor ^ other)] = "further"
+        marks[key] = "key"
+    table = Table(box=box.ROUNDED, header_style="bold", show_lines=False, padding=(0, 1))
+    for title in ("Minor", "Major"):
+        table.add_column(title, justify="left", no_wrap=True)
+    for number in range(1, 13):
+        cells = []
+        for minor in (True, False):
+            k = _camelot(number, minor)
+            text = (
+                f" {format_key(k, KeyNotation.CAMELOT):>3}  {_spellings(k):<8} "
+                f"{format_key(k, KeyNotation.OPEN_KEY):>3} "
+            )
+            cells.append(Text(text, style=KEY_STYLES.get(marks.get(k, ""), "")))
+        table.add_row(*cells)
+    if key is not None:
+        table.caption = Text.assemble(
+            (f" {_spellings(key)} ", KEY_STYLES["key"]), "  ",
+            (" next to it ", KEY_STYLES["next"]), "  ",
+            (" a step further ", KEY_STYLES["further"]),
+        )  # fmt: skip
+    return table
+
+
+def keys_strip(key: Key) -> Table:
+    """A flattened slice of the Camelot wheel around ``key``: five numbers wide, minor keys
+    above and major below, with ``key`` in the middle. Highlighted as in :func:`keys_table`;
+    the two corners are on the slice but don't mix with ``key``."""
+    number, minor = int(format_key(key, KeyNotation.CAMELOT)[:-1]), key.minor
+    table = Table(box=box.ROUNDED, show_header=False, show_lines=True, padding=(0, 1))
+    for _ in range(5):
+        table.add_column(justify="center", no_wrap=True, min_width=9)
+    for row_minor in (True, False):
+        cells = []
+        for d in (-2, -1, 0, 1, 2):
+            k = _camelot(number + d, row_minor)
+            steps = abs(d) + (row_minor != minor)  # moves around the wheel to get there
+            style = KEY_STYLES["key"] if steps == 0 else (
+                KEY_STYLES["next"] if steps == 1 else KEY_STYLES["further"] if steps == 2 else "dim"
+            )  # fmt: skip
+            cells.append(
+                Text.assemble(
+                    (f"{_spellings(k)}\n", "bold"), format_key(k, KeyNotation.CAMELOT), style=style
+                )
+            )
+        table.add_row(*cells)
+    table.caption = Text.assemble(
+        (" next to it ", KEY_STYLES["next"]), "  ", (" a step further ", KEY_STYLES["further"]),
+    )  # fmt: skip
+    return table
+
+
+def _print_keys(chosen: str | None) -> int:
+    key = parse_key(chosen) if chosen else None
+    if chosen and key is None:
+        print(f"Not a key: {chosen!r}", file=sys.stderr)
+        return 1
+    Console().print(keys_strip(key) if key is not None else keys_table(None))
+    return 0
 
 
 def _note(message: str) -> None:
@@ -208,12 +310,24 @@ def main(argv: list[str] | None = None) -> int:
     restore.add_argument("backup", help="a backup folder made by convert-drive")
     restore.add_argument("drive", help="the stick's mount point")
 
+    keys = sub.add_parser(
+        "keys",
+        help="print the Camelot wheel, or the keys near a key",
+        description="With no key: the Camelot wheel with musical and Open Key names. With a key "
+        "in any notation (8A, Am, G#m, 1m): the slice of the wheel around it, minor keys above "
+        "and major below, highlighting the keys next to it (green) and a step further (orange).",
+    )
+    keys.add_argument("key", nargs="?", help="e.g. 8A, Am, F#m, 1m")
+
     serve = sub.add_parser("serve", help="run the web UI")
     serve.add_argument("--host", default="127.0.0.1")
     serve.add_argument("--port", type=int, default=8000)
     serve.add_argument("--no-browser", action="store_true", help="don't open the web UI")
 
     args = parser.parse_args(argv)
+    if args.command == "keys":
+        return _print_keys(args.key)
+
     if args.command == "serve":
         import threading
         import webbrowser
