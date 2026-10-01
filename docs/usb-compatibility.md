@@ -37,7 +37,7 @@ Stick: 32 GB, reset before every test with `scripts/wipe-usb /dev/sdX` (one MBR 
 | Serato (drag crates to the stick and "Copy")           |    N/A    |   OK   |  OK   |     OK     |
 | cratemover: Mixxx → Rekordbox USB                      |     —     |   —    |   —   |     —      |
 | cratemover: Mixxx → Serato                             |     —     |   —    |   —   |     —      |
-| cratemover: convert Rekordbox stick → + Serato         |    N/A    |   —    |   —   |     —      |
+| cratemover: convert Rekordbox stick → + Serato         |    N/A    |   OK   |  OK   |     OK     |
 | cratemover: convert Serato stick → + Rekordbox         |    OK     |  N/A   |  OK   |     OK     |
 | cratemover: sync into an existing Rekordbox stick (#1) |     —     |   —    |   —   |     —      |
 
@@ -48,6 +48,15 @@ Notes:
   `_Serato_` and `test/` (test is the crate exported from Serato). This smells like our original
   issue, and I think it's "Rekordbox can't handle other files on the USB".
 - Serato -> Serato: "Serato library on your drive failed to open and will not appear in your library".
+- 2026-10-02, cratemover convert (now "replace X with Y", no second library): Serato → Rekordbox
+  (VJI1) loaded in Rekordbox. Rekordbox → Serato → Rekordbox (9HKT) kept tracks, playlists,
+  paths, audio, cue positions and grids; the return trip first crashed Rekordbox on musical key
+  names, fixed (Camelot), and the fixed database loaded (swap test C). The full round trip
+  hasn't been rerun since the fix. Big stick (7O2W, 151 tracks, 5 playlists, 325 cues):
+  Rekordbox → Serato passed every check and a fresh Serato read it. An earlier attempt on the
+  same export (OE8V) left Rekordbox calling the restored, byte-identical stick broken; most
+  likely Rekordbox had the stick open during the conversion, so `convert-usb` now refuses while
+  any program has the drive open or Rekordbox/Serato is running.
 
 What "works" means for each reader:
 
@@ -95,9 +104,9 @@ What "works" means for each reader:
   `StockDate` (date added to the collection) while `export.pdb` holds `DateCreated`. Converting
   from `export.pdb` can't recover `StockDate`.
 - **2026-10-02, Serato crate Copy with a shared track (stick FX5Z):** crates `test_crate_1` and
-  `test_crate_2` shared one track (HUGEL). Copying both crates to the stick put HUGEL in *both*
+  `test_crate_2` shared one track (HUGEL). Copying both crates to the stick put HUGEL in _both_
   folders (`test_crate_1/` and `test_crate_2/`, identical files), and then each crate listed
-  *both* copies, in the `.crate` files and in Serato 4's stick database alike: one track, two
+  _both_ copies, in the `.crate` files and in Serato 4's stick database alike: one track, two
   files, four crate entries. Probably a Serato bug (it seems to treat the two copies as one
   track). cratemover deliberately departs from this when it relocates audio for Serato: a
   shared track is stored once, in its first crate's folder, and listed once per crate. See
