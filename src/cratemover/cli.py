@@ -5,6 +5,8 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import time
+from pathlib import Path
 
 from .convert import (
     SOURCE_FORMATS,
@@ -78,6 +80,14 @@ def _add_usb_args(parser: argparse.ArgumentParser) -> None:
         default=OneLibraryMode.AUTO,
     )
     parser.add_argument("--device-name", default="")
+
+
+def _outcome(ok: bool, message: str) -> None:
+    """A last line that stands out: green for success, red for failure."""
+    line = f"{'✔' if ok else '✘'} {message}"
+    if sys.stdout.isatty():
+        line = f"\033[1;{32 if ok else 31}m{line}\033[0m"
+    print(f"\n{line}")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -162,6 +172,34 @@ def main(argv: list[str] | None = None) -> int:
     )
     _add_usb_args(sync)
 
+    drive = sub.add_parser(
+        "convert-drive",
+        help="replace a USB stick's library with the other format, in place",
+        description="Back the stick's library and music up to this computer byte for byte, "
+        "replace the library with the other format, check the result exactly, and restore the "
+        "backup if the check fails.",
+    )
+    drive.add_argument("drive", help="the stick's mount point, e.g. /media/me/STICK")
+    drive.add_argument(
+        "--to", dest="target_format", required=True, type=Format,
+        choices=[Format.REKORDBOX_USB, Format.SERATO],
+    )  # fmt: skip
+    drive.add_argument(
+        "--backup-dir", default="export/backups", help="where the backup goes (on this computer)"
+    )
+    drive.add_argument("--whole-drive", action="store_true", help="back up every file on the stick")
+    drive.add_argument(
+        "--onelibrary", action="store_true", help="Rekordbox: also write OneLibrary (experimental)"
+    )
+    drive.add_argument("--no-waveforms", action="store_true", help="Rekordbox: flat waveforms")
+    drive.add_argument(
+        "--mp3-decoder", type=Mp3Decoder, choices=list(Mp3Decoder), default=Mp3Decoder.MAD
+    )
+
+    restore = sub.add_parser("restore-drive", help="put a stick back as a backup has it")
+    restore.add_argument("backup", help="a backup folder made by convert-drive")
+    restore.add_argument("drive", help="the stick's mount point")
+
     serve = sub.add_parser("serve", help="run the web UI")
     serve.add_argument("--host", default="127.0.0.1")
     serve.add_argument("--port", type=int, default=8000)
@@ -183,7 +221,47 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     def progress(message: str) -> None:
-        print(message, file=sys.stderr)
+        print(f"{time.strftime('%H:%M:%S')}  {message}", file=sys.stderr)
+
+    if args.command == "convert-drive":
+        from .drive_convert import DriveConvertOptions, convert_drive
+
+        name = {Format.REKORDBOX_USB: "Rekordbox", Format.SERATO: "Serato"}[args.target_format]
+        try:
+            result = convert_drive(
+                Path(args.drive),
+                DriveConvertOptions(
+                    target=args.target_format,
+                    backup_dir=args.backup_dir,
+                    full_backup=args.whole_drive,
+                    waveforms=not args.no_waveforms,
+                    onelibrary=args.onelibrary,
+                    mp3_decoder=args.mp3_decoder,
+                ),
+                progress,
+            )
+        except (ValueError, OSError) as exc:
+            print(str(exc), file=sys.stderr)
+            _outcome(False, f"NOT CONVERTED: {args.drive} was left (or put back) as it was")
+            return 1
+        for warning in result.warnings:
+            progress(warning)
+        progress(f"Backup: {result.backup}")
+        _outcome(True, f"CONVERTED {args.drive} to {name}, checked track by track")
+        return 0
+
+    if args.command == "restore-drive":
+        from .drive_convert import restore_drive
+
+        try:
+            for line in restore_drive(Path(args.backup), Path(args.drive), progress):
+                progress(line)
+        except OSError as exc:
+            print(str(exc), file=sys.stderr)
+            _outcome(False, f"RESTORE FAILED: {args.drive} doesn't match the backup")
+            return 1
+        _outcome(True, f"RESTORED {args.drive}: every file matches the backup")
+        return 0
 
     if args.command == "sync":
         written = {

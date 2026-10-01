@@ -104,10 +104,10 @@ stick only shows up in the file browser.
 drive to Serato* next to it in the *USB drives* panel, then *Back up and convert* (or POST to
 `/api/drives/convert`). It replaces one program's library with the other's, and nothing else:
 
-1. backs up the stick's library folder (`PIONEER` or `_Serato_`) and, for every audio file whose
-   Serato tags will change, the original tag values, to `BACKUP_DIR` on the computer (default
-   `exports/backups`); tick *Back up the whole drive* to copy the whole stick instead. It checks
-   there's room first. Nothing is backed up onto the stick;
+1. copies the stick's library folder (`PIONEER` or `_Serato_`) and every audio file the library
+   uses, byte for byte, to `BACKUP_DIR` on the computer (default `exports/backups`), with a
+   checksum for each file; tick *Back up the whole drive* to copy the whole stick instead. It
+   checks there's room first. Nothing is backed up onto the stick;
 2. reads the library on the stick, deletes its folder, and writes the other format onto the same
    stick, pointing at the audio already there (nothing is copied unless a format has to be
    transcoded, e.g. Ogg to MP3 for Rekordbox), with cues and grids moved for each program's MP3
@@ -121,8 +121,8 @@ stick only ever has one library: the conversion refuses a stick that has both, a
 cratemover write will add a second library to a stick. It never adds a `rekordbox.xml`. Serato keeps cues and grids inside the audio files, so converting to Serato updates
 those tags; converting away from Serato leaves them in place (other programs ignore them).
 
-*Restore* on a backup puts the stick back as it was: library folders, Serato tags, and files the
-conversion added removed. Nothing reformats or re-images the drive: each program only reads its
+*Restore* on a backup puts every backed-up file back byte for byte, removes what the conversion
+added, and checks every file against its checksum. Nothing reformats or re-images the drive: each program only reads its
 own library files, so rewriting those (byte for byte as that program writes them, for Rekordbox)
 is the whole conversion.
 
@@ -268,8 +268,8 @@ Format sources: [Deep Symmetry's Rekordbox analysis](https://djl-analysis.deepsy
 [pyrekordbox](https://github.com/dylanljones/pyrekordbox), [rekordcrate](https://github.com/Holzhaus/rekordcrate),
 [Holzhaus/serato-tags](https://github.com/Holzhaus/serato-tags),
 [serato-tools](https://github.com/bvandercar-vt/serato-tools), Mixxx's `src/track/serato/` and
-`src/library/serato/`, and AlphaTheta's Rekordbox XML format list. The research behind the USB
-writer is in [`../mixxx-to-rekordbox/usb-analysis-plan.md`](../mixxx-to-rekordbox/usb-analysis-plan.md).
+`src/library/serato/`, and AlphaTheta's Rekordbox XML format list. The Rekordbox USB stick
+format, as far as we know it, is described in [`docs/rekordbox-usb-format.md`](docs/rekordbox-usb-format.md).
 Decoder offsets and Mixxx database code are adapted from `../mixxx-to-rekordbox` (copied, not
 shared). GPL-3.0.
 

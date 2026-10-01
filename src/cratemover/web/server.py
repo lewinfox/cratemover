@@ -20,6 +20,7 @@ import os
 import sys
 import tempfile
 import threading
+import time
 import traceback
 import uuid
 import zipfile
@@ -128,7 +129,7 @@ def _start(kind: str, work: Any) -> Job:
 
     def progress(message: str) -> None:
         job.message = message
-        job.log.append(message)
+        job.log.append(f"{time.strftime('%H:%M:%S')}  {message}")
 
     def run() -> None:
         try:
@@ -147,7 +148,7 @@ def get_job(job_id: str) -> dict[str, Any]:
     job = _jobs.get(job_id)
     if job is None:
         raise HTTPException(404, "no such job")
-    return asdict(job) | {"log": job.log[-20:]}
+    return asdict(job)
 
 
 # --- info and file browsing ----------------------------------------------------------------

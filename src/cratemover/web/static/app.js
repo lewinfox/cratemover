@@ -44,11 +44,34 @@ const post = (path, body) => api(path, {
   method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
 });
 
+// A collapsible log under a status line, filled from the job's log as it runs.
+function jobLog(statusEl) {
+  // Loading a library reports through a stand-in that only shows on the active tab: no log there.
+  if (!(statusEl instanceof Element)) return Object.assign(document.createElement("details"), { innerHTML: "<pre></pre>" });
+  let el = statusEl.nextElementSibling;
+  if (!el || !el.classList.contains("job-log")) {
+    el = document.createElement("details");
+    el.className = "job-log";
+    el.innerHTML = "<summary>Log</summary><pre></pre>";
+    statusEl.after(el);
+  }
+  return el;
+}
+
 async function waitForJob(jobId, statusEl) {
+  const log = jobLog(statusEl);
+  log.open = false;
   for (;;) {
     const job = await api(`/api/jobs/${jobId}`);
+    const pre = log.querySelector("pre");
+    const atEnd = pre.scrollTop + pre.clientHeight >= pre.scrollHeight - 4;
+    pre.textContent = job.log.join("\n");
+    if (atEnd) pre.scrollTop = pre.scrollHeight;
     if (job.status === "done") return job.result;
-    if (job.status === "error") throw new Error(job.error);
+    if (job.status === "error") {
+      log.open = true;
+      throw new Error(job.error);
+    }
     statusEl.textContent = job.message || "Working…";
     await new Promise((r) => setTimeout(r, 500));
   }
@@ -514,8 +537,8 @@ function renderConvertPanel() {
   $("cv-title").textContent = `Convert ${d.label} from ${source} to ${name}`;
   $("cv-hint").textContent = `The ${source} library on this drive is replaced by a ${name} library that uses the music already on it. Nothing else is added to the drive.` +
     (target === "serato" ? " Serato keeps cues and grids inside the audio files, so those are updated." : "") +
-    ` The library is backed up to this computer first, so it can be restored.`;
-  $("cv-full-label").textContent = `Back up the whole drive (${gb(d.total_bytes - d.free_bytes)}), not just the library folders`;
+    ` The library and all its music are copied to this computer first, byte for byte, so the drive can be put back exactly.`;
+  $("cv-full-label").textContent = `Back up the whole drive (${gb(d.total_bytes - d.free_bytes)}), not just the library and its music`;
   $("cv-rekordbox").classList.toggle("hidden", target !== "rekordbox_usb");
   $("cv-run").classList.toggle("hidden", w.done);
   $("cv-run").disabled = w.busy;
