@@ -221,4 +221,16 @@ def test_onelibrary_written_alongside(library_copy: Path, tmp_path: Path) -> Non
     ol = read_onelibrary(db)
     pdb = read_pdb((stick / "PIONEER/rekordbox/export.pdb").read_bytes())
     assert [t.file_path for t in ol.tracks] == [t.file_path for t in pdb.tracks]
+    # Fields matched to what rekordbox 7.2.19 writes (compared against its own export).
+    from cratemover.pioneer.keys import ONE_LIBRARY, open_encrypted
+
+    con = open_encrypted(db, ONE_LIBRARY)
+    version, created = con.execute("SELECT dbVersion, createdDate FROM property").fetchone()
+    assert version == "1000" and created
+    assert {r[0] for r in con.execute("SELECT isHotCueAutoLoadOn FROM content")} == {0}
+    assert (
+        con.execute("SELECT count(*) FROM content WHERE album_id = 0 OR label_id = 0").fetchone()[0]
+        == 0
+    )
+    con.close()
     shutil.rmtree(stick / "PIONEER/USBANLZ")

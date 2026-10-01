@@ -17,6 +17,7 @@ import os
 import random
 import shutil
 import tempfile
+from datetime import date
 from pathlib import Path
 
 from .keys import ONE_LIBRARY, open_encrypted
@@ -78,6 +79,10 @@ COLORS = [(1, "Pink"), (2, "Red"), (3, "Orange"), (4, "Yellow"), (5, "Green"), (
           (8, "Purple")]  # fmt: skip
 
 
+# property.dbVersion, as rekordbox 7.2.19 writes it (see write_onelibrary).
+DB_VERSION = "1000"
+
+
 def write_onelibrary(pdb: Pdb, path: Path) -> None:
     """Write ``exportLibrary.db`` describing the same library as ``pdb``."""
     with tempfile.TemporaryDirectory(dir=path.parent) as tmp:
@@ -91,25 +96,35 @@ def write_onelibrary(pdb: Pdb, path: Path) -> None:
         conn.executemany("INSERT INTO category VALUES (?, ?, ?, ?)", CATEGORIES)
         conn.executemany("INSERT INTO sort VALUES (?, ?, ?, ?, ?)", SORTS)
         conn.executemany("INSERT INTO myTag VALUES (?, ?, ?, ?, ?)", MY_TAG_CATEGORIES)
+        # dbVersion: rekordbox 7.2.19 writes '1000' (its own export, 2026-10-01); a rekordbox 6.8.6
+        # export (acrilique/rekordlib test data) had '10000'. So it depends on the rekordbox
+        # version: we match the newest seen. myTagMasterDBID identifies the rekordbox collection
+        # the My Tags came from; we have none, so it's random.
         conn.execute(
-            "INSERT INTO property VALUES (?, '10000', ?, ?, 0, ?)",
-            (pdb.device_name, len(pdb.tracks), pdb.export_date, random.randint(1, 0xFFFFFFFF)),
+            "INSERT INTO property VALUES (?, ?, ?, ?, 0, ?)",
+            (
+                pdb.device_name,
+                DB_VERSION,
+                len(pdb.tracks),
+                pdb.export_date or date.today().isoformat(),
+                random.randint(1, 0xFFFFFFFF),
+            ),
         )
         conn.executemany("INSERT INTO artist VALUES (?, ?, NULL)", list(pdb.artists.items()))
         conn.executemany(
-            "INSERT INTO album VALUES (?, ?, NULL, NULL, 0, NULL)",
-            [(i, n) for i, (n, _) in pdb.albums.items()],
+            "INSERT INTO album VALUES (?, ?, ?, NULL, 0, NULL)",
+            [(i, n, artist or None) for i, (n, artist) in pdb.albums.items()],
         )
         conn.executemany("INSERT INTO genre VALUES (?, ?)", list(pdb.genres.items()))
         conn.executemany("INSERT INTO label VALUES (?, ?)", list(pdb.labels.items()))
         conn.executemany("INSERT INTO key VALUES (?, ?)", list(pdb.keys.items()))
         conn.executemany(
             "INSERT INTO content VALUES (?, ?, NULL, '', ?, ?, ?, ?, ?, ?, NULL, ?, 0, ?, ?, ?, ?, ?, 0, ?, ?, ?, "
-            "?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '', ?, 1, 1, '', ?, ?, ?, 41, 788224, 0, NULL, NULL, NULL)",
+            "?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '', ?, 0, 1, '', ?, ?, ?, 41, 788224, 0, NULL, NULL, NULL)",
             [
                 (
                     t.id, t.title, t.tempo, t.duration, t.track_number, t.disc_number, t.artist_id or None,
-                    t.remixer_id or None, t.composer_id or None, t.album_id, t.genre_id, t.label_id, t.key_id,
+                    t.remixer_id or None, t.composer_id or None, t.album_id or None, t.genre_id, t.label_id or None, t.key_id,
                     t.color_id, t.comment, t.rating, t.year, t.release_date, t.date_added, t.date_added,
                     t.file_path, t.filename, t.file_size, t.file_type, t.bitrate, t.sample_depth, t.sample_rate,
                     t.play_count, t.master_db_id, t.master_content_id or t.id + 20, t.analyze_path,
