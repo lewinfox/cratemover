@@ -80,10 +80,12 @@ function buildTabs() {
   for (const s of [...state.sources, ...state.extra]) {
     const key = `${s.format}:${s.path}`;
     if (tabs.some((t) => t.key === key)) continue;
-    const drive = state.drives.find((d) => s.path === d.path || s.path.startsWith(d.path + "/"));
+    // Windows drives are E:\ and their folders E:\_Serato_, so compare with one kind of slash.
+    const slash = (p) => p.replaceAll("\\", "/").replace(/\/$/, "");
+    const drive = state.drives.find((d) => slash(s.path) === slash(d.path) || slash(s.path).startsWith(slash(d.path) + "/"));
     let label = NAMES[s.format] || "Library";
     if (drive) label = `USB: ${drive.label} (${label})`;
-    else if (s.format === "rekordbox_xml") label = `XML: ${s.path.split("/").pop()}`;
+    else if (s.format === "rekordbox_xml") label = `XML: ${s.path.split(/[\\/]/).pop()}`;
     tabs.push({ key, ...s, drive, label });
   }
   for (const d of state.drives) {

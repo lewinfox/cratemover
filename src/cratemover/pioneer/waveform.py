@@ -54,14 +54,29 @@ class Measured:
         return self.frames * 1000.0 / RATE
 
 
+def ffmpeg() -> str | None:
+    """The ffmpeg on PATH, else the one bundled with imageio-ffmpeg (installed outside Docker)."""
+    found = shutil.which("ffmpeg")
+    if found:
+        return found
+    try:
+        import imageio_ffmpeg
+    except ImportError:
+        return None
+    try:
+        return imageio_ffmpeg.get_ffmpeg_exe()
+    except RuntimeError:
+        return None
+
+
 def have_ffmpeg() -> bool:
-    return shutil.which("ffmpeg") is not None
+    return ffmpeg() is not None
 
 
 def measure(path: Path) -> Measured:
     """Decode ``path`` with ffmpeg and measure every 1/150 s column."""
     proc = subprocess.run(
-        ["ffmpeg", "-nostdin", "-v", "error", "-i", str(path), "-filter_complex", _FILTER,
+        [ffmpeg() or "ffmpeg", "-nostdin", "-v", "error", "-i", str(path), "-filter_complex", _FILTER,
          "-map", "[out]", "-f", "f32le", "-"],
         capture_output=True,
         check=True,

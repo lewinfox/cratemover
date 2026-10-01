@@ -7,6 +7,9 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
+from cratemover.model import Format
+from cratemover.sync import Direction
+
 
 @pytest.fixture
 def client(mixxx_root: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> TestClient:
@@ -32,7 +35,7 @@ def _wait(client: TestClient, job_id: str) -> dict:
 def test_index_and_info(client: TestClient, mixxx_root: Path) -> None:
     assert "Cratemover" in client.get("/").text
     info = client.get("/api/info").json()
-    assert {"format": "mixxx", "path": str(mixxx_root / "mixxx" / "mixxxdb.sqlite")} in info[
+    assert {"format": Format.MIXXX, "path": str(mixxx_root / "mixxx" / "mixxxdb.sqlite")} in info[
         "suggestions"
     ]
 
@@ -44,7 +47,7 @@ def test_browse_is_restricted(client: TestClient, mixxx_root: Path) -> None:
 
 def test_inspect_convert_download(client: TestClient, mixxx_root: Path) -> None:
     job = client.post(
-        "/api/inspect", json={"format": "mixxx", "path": str(mixxx_root / "mixxx")}
+        "/api/inspect", json={"format": Format.MIXXX, "path": str(mixxx_root / "mixxx")}
     ).json()
     lib = _wait(client, job["job_id"])
     assert lib["summary"]["tracks"] == 6 and lib["summary"]["missing_files"] == 1
@@ -68,13 +71,13 @@ def test_inspect_detects_the_format(client: TestClient, mixxx_root: Path) -> Non
     assert _wait(client, job["job_id"])["format"] == "mixxx"
     assert client.post("/api/inspect", json={"path": str(mixxx_root / "nope")}).status_code == 400
     sources = client.get("/api/sources").json()["sources"]
-    assert {"format": "mixxx", "path": str(mixxx_root / "mixxx" / "mixxxdb.sqlite")} in sources
+    assert {"format": Format.MIXXX, "path": str(mixxx_root / "mixxx" / "mixxxdb.sqlite")} in sources
 
 
 def test_upload_rekordbox_xml(client: TestClient) -> None:
     xml = (Path(__file__).parent / "fixtures/rekordbox/rekordbox6-database.xml").read_bytes()
     path = client.post("/api/upload", files={"file": ("rekordbox.xml", xml)}).json()["path"]
-    job = client.post("/api/inspect", json={"format": "rekordbox_xml", "path": path}).json()
+    job = client.post("/api/inspect", json={"format": Format.REKORDBOX_XML, "path": path}).json()
     assert _wait(client, job["job_id"])["summary"]["tracks"] == 6
 
 
@@ -90,8 +93,8 @@ def test_sync_endpoint_preview_and_run(
 
     server.BROWSE_ROOTS[:] = [library_copy, tmp_path / "export"]
     body = {
-        "a": {"format": "mixxx", "path": str(library_copy / "mixxx")},
-        "b": {"format": "rekordbox_usb", "path": str(stick)},
+        "a": {"format": Format.MIXXX, "path": str(library_copy / "mixxx")},
+        "b": {"format": Format.REKORDBOX_USB, "path": str(stick)},
         "direction": "a_to_b",
         "dry_run": True,
         "write": {"waveforms": False, "onelibrary": "off"},
@@ -112,7 +115,7 @@ def test_sync_endpoint_preview_and_run(
     body["dry_run"] = False
     done = _wait(client, client.post("/api/sync", json=body).json()["job_id"])
     assert done["a_to_b"]["written"]["summary"]["tracks"] >= 5
-    outside = body | {"b": {"format": "rekordbox_usb", "path": "/etc"}}
+    outside = body | {"b": {"format": Format.REKORDBOX_USB, "path": "/etc"}}
     assert client.post("/api/sync", json=outside).status_code == 403
 
 
@@ -133,19 +136,19 @@ def test_sync_sends_only_the_chosen_playlists(library_copy: Path, tmp_path: Path
     )
     from cratemover.sync import SyncOptions
 
-    mixxx = ReadOptions("mixxx", str(library_copy / "mixxx"))
+    mixxx = ReadOptions(Format.MIXXX, str(library_copy / "mixxx"))
     source = read_library(mixxx)
     one = playlist_paths(source)[0]
     stick = tmp_path / "STICK"
     stick.mkdir()
-    usb = WriteOptions("rekordbox_usb", str(stick), waveforms=False, usb_xml=False)
+    usb = WriteOptions(Format.REKORDBOX_USB, str(stick), waveforms=False, usb_xml=False)
     write_library(source, WriteOptions(**{**usb.__dict__, "playlists": [one]}), [])
 
     def added(playlists: list[str]) -> int:
         result = sync_libraries(
-            SyncSide(mixxx, WriteOptions("mixxx", "")),
-            SyncSide(ReadOptions("rekordbox_usb", str(stick)), usb),
-            "a_to_b",
+            SyncSide(mixxx, WriteOptions(Format.MIXXX, "")),
+            SyncSide(ReadOptions(Format.REKORDBOX_USB, str(stick)), usb),
+            Direction.A_TO_B,
             SyncOptions(),
             dry_run=True,
             playlists=playlists,

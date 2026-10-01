@@ -15,6 +15,16 @@ from enum import StrEnum
 from pathlib import PurePosixPath, PureWindowsPath
 
 
+class Format(StrEnum):
+    """The kinds of library cratemover reads and writes."""
+
+    MIXXX = "mixxx"  # mixxxdb.sqlite
+    REKORDBOX_XML = "rekordbox_xml"
+    REKORDBOX_DB = "rekordbox_db"  # Rekordbox 6/7's own master.db (read only)
+    REKORDBOX_USB = "rekordbox_usb"  # a stick's PIONEER/rekordbox/export.pdb
+    SERATO = "serato"  # a _Serato_ folder, on the computer or a stick
+
+
 class CueRole(StrEnum):
     CUE = "cue"  # a hot cue (slot set) or a memory cue (slot None)
     LOOP = "loop"  # a hot loop (slot set) or a saved/memory loop

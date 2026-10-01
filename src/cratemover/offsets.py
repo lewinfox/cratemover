@@ -16,23 +16,44 @@ from __future__ import annotations
 import struct
 from collections.abc import Iterator
 from dataclasses import dataclass
+from enum import StrEnum
 from pathlib import Path
-from typing import BinaryIO, Literal
+from typing import BinaryIO
 
 from mutagen.mp3 import HeaderNotFoundError, MPEGFrame
 from mutagen.mp3._util import XingHeader, XingHeaderError
 
-Mp3Decoder = Literal["MAD", "CoreAudio", "FFmpeg"]
-MP3_DECODERS: tuple[Mp3Decoder, ...] = ("MAD", "CoreAudio", "FFmpeg")
+
+class Mp3Decoder(StrEnum):
+    """The MP3 decoder a Mixxx build uses."""
+
+    MAD = "MAD"  # Linux and Windows builds
+    CORE_AUDIO = "CoreAudio"  # macOS builds
+    FFMPEG = "FFmpeg"
+
+
+class Mp3HeaderCase(StrEnum):
+    """What an MP3 has at its start, which decides how decoders skip the encoder delay."""
+
+    NO_XING = "A"  # no Xing/Info header
+    XING = "B"  # Xing without a LAME tag
+    LAME_NO_CRC = "C"  # LAME tag without a valid music CRC
+    LAME = "D"  # LAME tag with a music CRC
+
 
 # Offset per Mixxx MP3 decoder and header case (ms):
 #   A: no Xing/Info header, B: Xing without LAME tag,
 #   C: LAME tag without a valid music CRC, D: LAME tag with CRC.
 # Mixxx's own Rekordbox importer (src/library/rekordbox/rekordboxfeature.cpp) uses these.
-_MP3_OFFSETS: dict[str, dict[str, float]] = {
-    "MAD": {"A": 26, "D": 26},
-    "CoreAudio": {"A": 12, "B": 13, "C": 26, "D": 50},
-    "FFmpeg": {"D": 26},
+_MP3_OFFSETS: dict[Mp3Decoder, dict[Mp3HeaderCase, float]] = {
+    Mp3Decoder.MAD: {Mp3HeaderCase.NO_XING: 26, Mp3HeaderCase.LAME: 26},
+    Mp3Decoder.CORE_AUDIO: {
+        Mp3HeaderCase.NO_XING: 12,
+        Mp3HeaderCase.XING: 13,
+        Mp3HeaderCase.LAME_NO_CRC: 26,
+        Mp3HeaderCase.LAME: 50,
+    },
+    Mp3Decoder.FFMPEG: {Mp3HeaderCase.LAME: 26},
 }
 
 
@@ -62,17 +83,17 @@ def _first_frame(f: BinaryIO) -> MPEGFrame:
     raise HeaderNotFoundError("no MPEG frame found")
 
 
-def mp3_header_case(path: Path) -> Literal["A", "B", "C", "D"]:
+def mp3_header_case(path: Path) -> Mp3HeaderCase:
     with open(path, "rb") as f:
         frame = _first_frame(f)
         f.seek(frame.frame_offset + XingHeader.get_offset(frame))
         try:
             xing = XingHeader(f)
         except XingHeaderError:
-            return "A"
+            return Mp3HeaderCase.NO_XING
     if xing.lame_header is None:
-        return "B"
-    return "D" if xing.lame_header.music_crc > 0 else "C"
+        return Mp3HeaderCase.XING
+    return Mp3HeaderCase.LAME if xing.lame_header.music_crc > 0 else Mp3HeaderCase.LAME_NO_CRC
 
 
 def mp3_offset_ms(path: Path, decoder: Mp3Decoder) -> float:
@@ -168,7 +189,7 @@ def serato_offset_ms(path: Path | None, extension: str) -> float:
     if extension != "mp3" or path is None:
         return 0.0
     try:
-        if mp3_header_case(path) not in ("B", "C"):
+        if mp3_header_case(path) not in (Mp3HeaderCase.XING, Mp3HeaderCase.LAME_NO_CRC):
             return 0.0
         with open(path, "rb") as f:
             rate = _first_frame(f).sample_rate
@@ -177,7 +198,9 @@ def serato_offset_ms(path: Path | None, extension: str) -> float:
         return 0.0
 
 
-def mixxx_offset_ms(path: Path | None, extension: str, decoder: Mp3Decoder = "MAD") -> Offset:
+def mixxx_offset_ms(
+    path: Path | None, extension: str, decoder: Mp3Decoder = Mp3Decoder.MAD
+) -> Offset:
     """Milliseconds to add to Mixxx positions to reach the reference (Rekordbox) timeline."""
     if extension in ("m4a", "mp4", "aac"):
         if path is None:
@@ -188,7 +211,10 @@ def mixxx_offset_ms(path: Path | None, extension: str, decoder: Mp3Decoder = "MA
             return Offset(FALLBACK_MP4_OFFSET_MS, f"could not read MP4 encoder delay: {exc}")
     if extension == "mp3":
         if path is None:
-            return Offset(_MP3_OFFSETS[decoder].get("D", 0), "file not found; assumed a LAME MP3")
+            return Offset(
+                _MP3_OFFSETS[decoder].get(Mp3HeaderCase.LAME, 0),
+                "file not found; assumed a LAME MP3",
+            )
         try:
             return Offset(mp3_offset_ms(path, decoder))
         except Exception as exc:

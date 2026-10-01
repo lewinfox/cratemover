@@ -10,14 +10,15 @@ from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any
 
 from . import grid as gridlib
 from .keys import KeyNotation
 from .mixxx import MixxxReadOptions, MixxxWriteOptions, find_database, read_mixxx, write_mixxx
-from .model import Library, Playlist
+from .model import Format, Library, Playlist
 from .offsets import Mp3Decoder
 from .paths import apply_rules, infer_access_rules, make_resolver
+from .pioneer.usb import OneLibraryMode
 from .rekordbox_xml import RekordboxWriteOptions, read_rekordbox_xml, write_rekordbox_xml
 from .serato.library import (
     CRATE_DIR,
@@ -28,18 +29,17 @@ from .serato.library import (
     read_serato,
     write_serato,
 )
-from .sync import Prefer, SyncOptions, merge
+from .sync import Direction, Prefer, SyncOptions, merge
 
-Format = Literal["mixxx", "rekordbox_xml", "rekordbox_db", "rekordbox_usb", "serato"]
-FORMATS: dict[str, str] = {
-    "mixxx": "Mixxx (mixxxdb.sqlite)",
-    "rekordbox_usb": "Rekordbox USB stick (PIONEER/export.pdb)",
-    "rekordbox_xml": "Rekordbox XML",
-    "rekordbox_db": "Rekordbox 6/7 library (master.db)",
-    "serato": "Serato (_Serato_ folder, computer or USB)",
+FORMATS: dict[Format, str] = {
+    Format.MIXXX: "Mixxx (mixxxdb.sqlite)",
+    Format.REKORDBOX_USB: "Rekordbox USB stick (PIONEER/export.pdb)",
+    Format.REKORDBOX_XML: "Rekordbox XML",
+    Format.REKORDBOX_DB: "Rekordbox 6/7 library (master.db)",
+    Format.SERATO: "Serato (_Serato_ folder, computer or USB)",
 }
 SOURCE_FORMATS = FORMATS
-TARGET_FORMATS = {k: v for k, v in FORMATS.items() if k != "rekordbox_db"}
+TARGET_FORMATS = {k: v for k, v in FORMATS.items() if k != Format.REKORDBOX_DB}
 SYNC_FORMATS = TARGET_FORMATS  # sync writes back in place
 
 Progress = Callable[[str], None]
@@ -58,7 +58,7 @@ class ReadOptions:
     format: Format
     path: str
     access_rules: list[tuple[str, str]] = field(default_factory=list)
-    mp3_decoder: Mp3Decoder = "MAD"
+    mp3_decoder: Mp3Decoder = Mp3Decoder.MAD
     serato_root: str = "/"
     read_file_tags: bool = True
     # Folders to look for the music in when the library's own paths don't exist here
@@ -72,7 +72,7 @@ class WriteOptions:
     output_dir: str
     path_rules: list[tuple[str, str]] = field(default_factory=list)
     key_notation: KeyNotation | None = None  # None: the target's usual notation
-    mp3_decoder: Mp3Decoder = "MAD"
+    mp3_decoder: Mp3Decoder = Mp3Decoder.MAD
     memory_cues_to_hot_cues: bool = True
     # Rekordbox
     rekordbox_memory_cues: bool = True
@@ -89,7 +89,7 @@ class WriteOptions:
     copy_missing: bool = True  # copy tracks that aren't on the stick onto it
     waveforms: bool = True  # measure Rekordbox waveforms with ffmpeg
     device_name: str = ""
-    onelibrary: str = "auto"  # "auto" | "on" | "off"
+    onelibrary: OneLibraryMode = OneLibraryMode.AUTO
     usb_xml: bool = True  # also put a rekordbox.xml for importing into rekordbox on the stick
     usb_xml_root: str = (
         ""  # how the rekordbox computer sees the stick (E:/, /Volumes/STICK); "" = here
@@ -103,21 +103,21 @@ class WriteOptions:
 def read_library(options: ReadOptions, progress: Progress = _noop) -> Library:
     resolve = make_resolver(options.access_rules)
     path = Path(options.path)
-    if options.format == "mixxx":
+    if options.format == Format.MIXXX:
         library = read_mixxx(
             path, MixxxReadOptions(mp3_decoder=options.mp3_decoder), resolve, progress
         )
-    elif options.format == "rekordbox_xml":
+    elif options.format == Format.REKORDBOX_XML:
         library = read_rekordbox_xml(path)
-    elif options.format == "rekordbox_db":
+    elif options.format == Format.REKORDBOX_DB:
         from .rekordbox_db import read_rekordbox_db
 
         library = read_rekordbox_db(path, progress)
-    elif options.format == "rekordbox_usb":
+    elif options.format == Format.REKORDBOX_USB:
         from .pioneer.usb import read_rekordbox_usb
 
         library = read_rekordbox_usb(path, progress)
-    elif options.format == "serato":
+    elif options.format == Format.SERATO:
         library = read_serato(
             path,
             SeratoReadOptions(options.serato_root, options.read_file_tags),
@@ -133,7 +133,7 @@ def read_library(options: ReadOptions, progress: Progress = _noop) -> Library:
             progress("Found the music files: " + ", ".join(f"{a} => {b}" for a, b in rules))
             options.access_rules = [*options.access_rules, *rules]
             # Mixxx and Serato read from the audio files, so read again now they resolve.
-            if options.format in ("mixxx", "serato"):
+            if options.format in (Format.MIXXX, Format.SERATO):
                 return read_library(options, progress)
             resolve = make_resolver(options.access_rules)
     for track in library.tracks.values():
@@ -268,7 +268,7 @@ def write_library(
     out = Path(options.output_dir)
     warnings = list(library.warnings)
     files: list[Path] = []
-    if options.format == "rekordbox_xml":
+    if options.format == Format.REKORDBOX_XML:
         target = out if out.suffix.lower() == ".xml" else out / "rekordbox.xml"
         if options.in_place:
             _backup(target, stamp)
@@ -282,7 +282,7 @@ def write_library(
             ),
         )
         files, warnings = rb.files, warnings + rb.warnings
-    elif options.format == "rekordbox_usb":
+    elif options.format == Format.REKORDBOX_USB:
         from .pioneer.usb import UsbWriteOptions, write_rekordbox_usb
 
         usb = write_rekordbox_usb(
@@ -306,7 +306,7 @@ def write_library(
         )
         if options.usb_xml:
             files.append(_stick_xml(out, options, progress))
-    elif options.format == "serato":
+    elif options.format == Format.SERATO:
         serato_root = options.serato_root or "/"
         if options.in_place:
             try:
@@ -349,7 +349,7 @@ def write_library(
             )
         else:
             warnings.insert(0, f"Serato tags written to {se.tags_written} audio file(s).")
-    elif options.format == "mixxx":
+    elif options.format == Format.MIXXX:
         mixxx_options = MixxxWriteOptions(
             mp3_decoder=options.mp3_decoder,
             base_database=Path(options.mixxx_base_database)
@@ -375,7 +375,7 @@ def write_library(
     else:
         raise ValueError(f"cannot write {options.format!r}")
     missing = sum(1 for p in local.values() if p is None)
-    if missing and options.format != "rekordbox_xml":
+    if missing and options.format != Format.REKORDBOX_XML:
         warnings.append(
             f"{missing} of {len(local)} track file(s) were not found locally (check the file access rules)."
         )
@@ -409,7 +409,7 @@ def invert_rules(rules: list[tuple[str, str]]) -> list[tuple[str, str]]:
 def sync_libraries(
     a: SyncSide,
     b: SyncSide,
-    direction: Literal["a_to_b", "b_to_a", "both"],
+    direction: Direction,
     options: SyncOptions,
     dry_run: bool = False,
     progress: Progress = _noop,
@@ -427,17 +427,17 @@ def sync_libraries(
     result = SyncResult()
     rules_ab = options.path_rules
     jobs = []
-    if direction in ("a_to_b", "both"):
-        jobs.append(("a_to_b", lib_b, lib_a, b, rules_ab))
-    if direction in ("b_to_a", "both"):
+    if direction in (Direction.A_TO_B, Direction.BOTH):
+        jobs.append((Direction.A_TO_B, lib_b, lib_a, b, rules_ab))
+    if direction in (Direction.B_TO_A, Direction.BOTH):
         # A two-way sync keeps one preference: flip it so the same side wins both times.
-        jobs.append(("b_to_a", lib_a, lib_b, a, invert_rules(rules_ab)))
+        jobs.append((Direction.B_TO_A, lib_a, lib_b, a, invert_rules(rules_ab)))
     for name, base, incoming, side, rules in jobs:
         opts = copy.copy(options)
         opts.path_rules = rules
-        if direction == "both" and name == "b_to_a":
+        if direction == Direction.BOTH and name == Direction.B_TO_A:
             opts.prefer = Prefer.BASE if options.prefer is Prefer.INCOMING else Prefer.INCOMING
-        if name == "a_to_b" and playlists:
+        if name == Direction.A_TO_B and playlists:
             incoming = select(incoming, playlists)
         progress(f"Merging ({name.replace('_', ' ')})")
         merged, report = merge(base, incoming, opts)
@@ -451,7 +451,7 @@ def sync_libraries(
             write.in_place = True
             write.path_rules = []
             write.playlists = []
-            if side.read.format == "serato":
+            if side.read.format == Format.SERATO:
                 write.serato_root = side.read.serato_root
             progress(f"Writing ({name.replace('_', ' ')})")
             outcome["written"] = write_library(

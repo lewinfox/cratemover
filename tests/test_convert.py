@@ -12,7 +12,7 @@ from cratemover.convert import (
     read_library,
     write_library,
 )
-from cratemover.model import CueRole, Library, Track
+from cratemover.model import CueRole, Format, Library, Track
 from cratemover.paths import apply_rules, parse_rules
 from cratemover.serato.library import from_serato_path, to_serato_path
 
@@ -30,7 +30,7 @@ def _grid(track: Track) -> list[tuple[int, float, int]]:
 
 
 def test_read_mixxx(mixxx_root: Path) -> None:
-    lib = read_library(ReadOptions("mixxx", str(mixxx_root / "mixxx")))
+    lib = read_library(ReadOptions(Format.MIXXX, str(mixxx_root / "mixxx")))
     tracks = _by_title(lib)
     assert len(tracks) == 6
     alpha = tracks["First Light"]
@@ -43,13 +43,15 @@ def test_read_mixxx(mixxx_root: Path) -> None:
     assert names == {((), "Warm Up"), ((), "Peak Time"), (("Crates",), "Techno")}
 
 
-@pytest.mark.parametrize("target", ["serato", "rekordbox_xml", "mixxx"])
+@pytest.mark.parametrize("target", [Format.SERATO, Format.REKORDBOX_XML, Format.MIXXX])
 def test_round_trip_from_mixxx(library_copy: Path, tmp_path: Path, target: str) -> None:
-    source = read_library(ReadOptions("mixxx", str(library_copy / "mixxx")))
+    source = read_library(ReadOptions(Format.MIXXX, str(library_copy / "mixxx")))
     out = tmp_path / "out"
     result = write_library(source, WriteOptions(target, str(out), serato_write_tags=True), [])
     assert result.summary["tracks"] == 6
-    path = {"serato": out, "rekordbox_xml": out / "rekordbox.xml", "mixxx": out}[target]
+    path = {Format.SERATO: out, Format.REKORDBOX_XML: out / "rekordbox.xml", Format.MIXXX: out}[
+        target
+    ]
     back = _by_title(read_library(ReadOptions(target, str(path))))
     before = _by_title(source)
     for title in ("First Light", "Second Wind", "Drift", "Apple"):
@@ -67,8 +69,8 @@ def test_round_trip_from_mixxx(library_copy: Path, tmp_path: Path, target: str) 
 
 
 def test_mixxx_output_is_a_valid_mixxx_database(library_copy: Path, tmp_path: Path) -> None:
-    source = read_library(ReadOptions("mixxx", str(library_copy / "mixxx")))
-    write_library(source, WriteOptions("mixxx", str(tmp_path)), [])
+    source = read_library(ReadOptions(Format.MIXXX, str(library_copy / "mixxx")))
+    write_library(source, WriteOptions(Format.MIXXX, str(tmp_path)), [])
     db = sqlite3.connect(tmp_path / "mixxxdb.sqlite")
     settings = dict(db.execute("SELECT name, value FROM settings"))
     assert settings["mixxx.schema.version"] == "40"
@@ -82,10 +84,10 @@ def test_mixxx_output_is_a_valid_mixxx_database(library_copy: Path, tmp_path: Pa
 
 
 def test_mixxx_merge_into_base_database(library_copy: Path, tmp_path: Path) -> None:
-    source = read_library(ReadOptions("mixxx", str(library_copy / "mixxx")))
+    source = read_library(ReadOptions(Format.MIXXX, str(library_copy / "mixxx")))
     result = write_library(
         source,
-        WriteOptions("mixxx", str(tmp_path), mixxx_base_database=str(library_copy / "mixxx")),
+        WriteOptions(Format.MIXXX, str(tmp_path), mixxx_base_database=str(library_copy / "mixxx")),
         [],
     )
     db = sqlite3.connect(tmp_path / "mixxxdb.sqlite")
@@ -100,7 +102,7 @@ def test_serato_read_real_database(tmp_path: Path) -> None:
     (serato / "Subcrates" / "Test%%Nested.crate").write_bytes(
         (FIXTURES / "serato-db/TestCrate.crate").read_bytes()
     )
-    lib = read_library(ReadOptions("serato", str(tmp_path)))
+    lib = read_library(ReadOptions(Format.SERATO, str(tmp_path)))
     tracks = _by_title(lib)
     zeds = tracks["In The Beginning"]
     assert zeds.location == "/Users/bvand/Music/DJ Tracks/Zeds Dead - In The Beginning.mp3"
@@ -112,13 +114,13 @@ def test_serato_read_real_database(tmp_path: Path) -> None:
 
 def test_rekordbox_xml_read_real_file() -> None:
     lib = read_library(
-        ReadOptions("rekordbox_xml", str(FIXTURES / "rekordbox/rekordbox5-database.xml"))
+        ReadOptions(Format.REKORDBOX_XML, str(FIXTURES / "rekordbox/rekordbox5-database.xml"))
     )
     track = next(t for t in lib.tracks.values() if t.title == "Demo Track 1")
     assert track.location.startswith("C:/Music/PioneerDJ/Demo Tracks/")
     assert [round(c.position_ms) for c in track.cues if c.slot is None][:2] == [25, 15025]
     lib6 = read_library(
-        ReadOptions("rekordbox_xml", str(FIXTURES / "rekordbox/rekordbox6-database.xml"))
+        ReadOptions(Format.REKORDBOX_XML, str(FIXTURES / "rekordbox/rekordbox6-database.xml"))
     )
     demo2 = next(t for t in lib6.tracks.values() if t.title == "Demo Track 2")
     assert len(demo2.grid) == 1  # the per-beat TEMPO entries collapse into one section
@@ -144,9 +146,9 @@ def test_serato_paths() -> None:
 
 
 def test_selection(mixxx_root: Path, tmp_path: Path) -> None:
-    source = read_library(ReadOptions("mixxx", str(mixxx_root / "mixxx")))
+    source = read_library(ReadOptions(Format.MIXXX, str(mixxx_root / "mixxx")))
     result = write_library(
-        source, WriteOptions("rekordbox_xml", str(tmp_path), playlists=["Warm Up"]), []
+        source, WriteOptions(Format.REKORDBOX_XML, str(tmp_path), playlists=["Warm Up"]), []
     )
     assert result.summary == {
         "tracks": 3,
@@ -172,15 +174,15 @@ def test_serato_sample_rate_text() -> None:
 
 def test_serato_mp3_frame_offset(library_copy: Path, tmp_path: Path) -> None:
     """ffmpeg's MP3s have an Info header without a LAME tag: Serato counts that frame."""
-    from cratemover.offsets import mp3_header_case, serato_offset_ms
+    from cratemover.offsets import Mp3HeaderCase, mp3_header_case, serato_offset_ms
     from cratemover.serato.tags import read_tags
 
     mp3 = library_copy / "music" / "Alpha - First Light.mp3"
-    assert mp3_header_case(mp3) == "B"
+    assert mp3_header_case(mp3) == Mp3HeaderCase.XING
     assert serato_offset_ms(mp3, "mp3") == pytest.approx(1152000 / 44100)
-    source = read_library(ReadOptions("mixxx", str(library_copy / "mixxx")))
-    write_library(source, WriteOptions("serato", str(tmp_path), serato_write_tags=True), [])
+    source = read_library(ReadOptions(Format.MIXXX, str(library_copy / "mixxx")))
+    write_library(source, WriteOptions(Format.SERATO, str(tmp_path), serato_write_tags=True), [])
     raw = {c.index: c.position_ms for c in read_tags(mp3).markers.cues}
     assert raw[0] == 250 + 26  # hot cue A at 0.25 s in the reference timeline
-    back = _by_title(read_library(ReadOptions("serato", str(tmp_path))))["First Light"]
+    back = _by_title(read_library(ReadOptions(Format.SERATO, str(tmp_path))))["First Light"]
     assert round(back.hot_cues[0].position_ms) == 250  # and back again

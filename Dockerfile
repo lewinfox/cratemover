@@ -32,11 +32,11 @@ WORKDIR /app
 RUN --mount=type=cache,target=/root/.cache/uv \
     --mount=type=bind,source=uv.lock,target=uv.lock \
     --mount=type=bind,source=pyproject.toml,target=pyproject.toml \
-    uv sync --locked --no-install-project --no-dev --extra web --extra rekordbox
+    uv sync --locked --no-install-project --no-dev --no-install-package imageio-ffmpeg
 COPY pyproject.toml uv.lock README.md LICENSE ./
 COPY src ./src
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --locked --no-dev --extra web --extra rekordbox --no-editable \
+    uv sync --locked --no-dev --no-install-package imageio-ffmpeg --no-editable \
     && find .venv -name "*.pyi" -delete \
     && rm -rf .venv/lib/python*/site-packages/pip* .venv/lib/python*/site-packages/*/tests
 
@@ -53,4 +53,4 @@ ENV PATH="/app/.venv/bin:$PATH" \
     UPLOAD_DIR=/tmp/uploads
 EXPOSE 8000
 ENTRYPOINT ["cratemover"]
-CMD ["serve", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["serve", "--host", "0.0.0.0", "--port", "8000", "--no-browser"]

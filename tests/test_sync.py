@@ -13,8 +13,16 @@ from cratemover.convert import (
     sync_libraries,
     write_library,
 )
-from cratemover.model import Cue, CueRole, Library, Playlist, TempoMarker, Track
-from cratemover.sync import CuePolicy, PlaylistPolicy, Prefer, SyncOptions, match_tracks, merge
+from cratemover.model import Cue, CueRole, Format, Library, Playlist, TempoMarker, Track
+from cratemover.sync import (
+    CuePolicy,
+    Direction,
+    PlaylistPolicy,
+    Prefer,
+    SyncOptions,
+    match_tracks,
+    merge,
+)
 
 
 def _lib(*tracks: Track, playlists: dict[str, list[str]] | None = None) -> Library:
@@ -116,15 +124,17 @@ def test_transcoded_pair_shifts_cues() -> None:
 def test_two_way_sync_mixxx_and_stick(library_copy: Path, tmp_path: Path) -> None:
     stick = tmp_path / "stick"
     stick.mkdir()
-    mixxx = ReadOptions("mixxx", str(library_copy / "mixxx"))
-    usb = ReadOptions("rekordbox_usb", str(stick))
+    mixxx = ReadOptions(Format.MIXXX, str(library_copy / "mixxx"))
+    usb = ReadOptions(Format.REKORDBOX_USB, str(stick))
     write_library(
-        read_library(mixxx), WriteOptions("rekordbox_usb", str(stick), playlists=["Warm Up"]), []
+        read_library(mixxx),
+        WriteOptions(Format.REKORDBOX_USB, str(stick), playlists=["Warm Up"]),
+        [],
     )
     # A playlist made "on the stick", and a new hot cue in Mixxx.
     lib = read_library(usb)
     lib.playlists.children.append(Playlist("From CDJ", [next(iter(lib.tracks))]))
-    write_library(lib, WriteOptions("rekordbox_usb", str(stick), in_place=True), [])
+    write_library(lib, WriteOptions(Format.REKORDBOX_USB, str(stick), in_place=True), [])
     db = sqlite3.connect(library_copy / "mixxx" / "mixxxdb.sqlite")
     track_id = db.execute("SELECT id FROM library WHERE title = 'Drift'").fetchone()[0]
     db.execute(
@@ -135,9 +145,9 @@ def test_two_way_sync_mixxx_and_stick(library_copy: Path, tmp_path: Path) -> Non
     db.close()
 
     result = sync_libraries(
-        SyncSide(mixxx, WriteOptions("mixxx", "")),
-        SyncSide(usb, WriteOptions("rekordbox_usb", "")),
-        "both",
+        SyncSide(mixxx, WriteOptions(Format.MIXXX, "")),
+        SyncSide(usb, WriteOptions(Format.REKORDBOX_USB, "")),
+        Direction.BOTH,
         SyncOptions(),
     )
     assert result.a_to_b and result.b_to_a
@@ -154,9 +164,9 @@ def test_two_way_sync_mixxx_and_stick(library_copy: Path, tmp_path: Path) -> Non
     assert list((library_copy / "mixxx").glob("mixxxdb.sqlite.cratemover-*"))
     # Syncing again changes nothing.
     again = sync_libraries(
-        SyncSide(mixxx, WriteOptions("mixxx", "")),
-        SyncSide(usb, WriteOptions("rekordbox_usb", "")),
-        "both",
+        SyncSide(mixxx, WriteOptions(Format.MIXXX, "")),
+        SyncSide(usb, WriteOptions(Format.REKORDBOX_USB, "")),
+        Direction.BOTH,
         SyncOptions(),
         dry_run=True,
     )

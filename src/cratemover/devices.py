@@ -5,21 +5,28 @@ Mounts are read from ``/proc/self/mounts``: with the USB folder bind-mounted
 there, and disappear when unmounted. Where ``/proc`` doesn't list them (macOS
 hosts, where Docker Desktop shares ``/Volumes`` as a folder), folders under the
 USB roots that hold a Rekordbox or Serato library count as drives too.
+
+Run natively on macOS or Windows (no ``/proc``), drives come from psutil:
+everything mounted under ``/Volumes`` on a Mac, removable drive letters on Windows.
 """
 
 from __future__ import annotations
 
 import os
 import shutil
+import sys
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
-DEFAULT_ROOTS = ("/media", "/run/media", "/mnt", "/Volumes")
+from .detect import is_hidden
+from .model import Format
+
+DEFAULT_ROOTS = () if sys.platform == "win32" else ("/media", "/run/media", "/mnt", "/Volumes")
 # Filesystems that aren't drives even when mounted under a USB root.
 _VIRTUAL = {"proc", "sysfs", "devtmpfs", "devpts", "cgroup", "cgroup2", "overlay", "autofs",
             "binfmt_misc", "debugfs", "tracefs", "securityfs", "pstore", "mqueue", "fusectl"}  # fmt: skip
 # Players up to the CDJ-2000NXS2 only read FAT32 (and MBR partition tables).
-_OLD_PLAYER_OK = {"vfat", "fat", "msdos"}
+_OLD_PLAYER_OK = {"vfat", "fat", "fat32", "msdos"}
 
 
 @dataclass
@@ -42,7 +49,7 @@ class Drive:
 
 def usb_roots() -> list[Path]:
     value = os.environ.get("USB_ROOTS")
-    return [Path(p) for p in (value.split(":") if value else DEFAULT_ROOTS) if p]
+    return [Path(p) for p in (value.split(os.pathsep) if value else DEFAULT_ROOTS) if p]
 
 
 def _unescape(field_: str) -> str:
@@ -84,15 +91,18 @@ def _libraries(path: Path) -> list[dict[str, str]]:
     for folder in ("PIONEER", ".PIONEER"):
         rekordbox = path / folder / "rekordbox"
         if _is_file(rekordbox / "export.pdb") or _is_file(rekordbox / "exportLibrary.db"):
-            found.append({"format": "rekordbox_usb", "path": str(path)})
+            found.append({"format": Format.REKORDBOX_USB, "path": str(path)})
             break
     if _is_file(path / "_Serato_" / "database V2"):
-        found.append({"format": "serato", "path": str(path / "_Serato_"), "serato_root": str(path)})
+        found.append(
+            {"format": Format.SERATO, "path": str(path / "_Serato_"), "serato_root": str(path)}
+        )
     return found
 
 
 def _drive(path: Path, fstype: str = "", device: str = "") -> Drive:
-    drive = Drive(path=str(path), label=path.name, fstype=fstype, device=device)
+    fstype = fstype.lower()
+    drive = Drive(path=str(path), label=path.name or path.anchor, fstype=fstype, device=device)
     try:
         usage = shutil.disk_usage(path)
         drive.total_bytes, drive.free_bytes = usage.total, usage.free
@@ -123,11 +133,32 @@ def _drive(path: Path, fstype: str = "", device: str = "") -> Drive:
     return drive
 
 
+def _native_drives() -> list[Drive]:
+    """Drives on a macOS or Windows host, where there's no /proc to read."""
+    try:
+        import psutil
+    except ImportError:
+        return []
+    drives = []
+    for part in psutil.disk_partitions(all=False):
+        if sys.platform == "win32":
+            if "removable" not in part.opts:
+                continue
+        elif not part.mountpoint.startswith("/Volumes/"):
+            continue
+        path = Path(part.mountpoint)
+        if path.is_dir():
+            drives.append(_drive(path, part.fstype, part.device))
+    return drives
+
+
 def list_drives(
     roots: list[Path] | None = None, mounts_file: Path = Path("/proc/self/mounts")
 ) -> list[Drive]:
     roots = [r.resolve() for r in (roots if roots is not None else usb_roots()) if r.exists()]
     drives: dict[str, Drive] = {}
+    if sys.platform in ("darwin", "win32") and not mounts_file.exists():
+        drives = {d.path: d for d in _native_drives()}
     for device, mount_point, fstype in _mounts(mounts_file):
         if fstype in _VIRTUAL:
             continue
@@ -142,11 +173,7 @@ def list_drives(
             except OSError:
                 continue
             for candidate in candidates:
-                if (
-                    str(candidate) in drives
-                    or not candidate.is_dir()
-                    or candidate.name.startswith(".")
-                ):
+                if str(candidate) in drives or not candidate.is_dir() or is_hidden(candidate, root):
                     continue
                 if any(str(candidate).startswith(d + "/") for d in drives):
                     continue

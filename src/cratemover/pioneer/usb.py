@@ -28,6 +28,7 @@ from collections.abc import Callable
 from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass, field
 from datetime import date, datetime
+from enum import StrEnum
 from pathlib import Path, PurePosixPath
 
 import mutagen
@@ -154,6 +155,12 @@ def read_rekordbox_usb(path: Path, progress: Progress = print) -> Library:
 # --- writing --------------------------------------------------------------------------
 
 
+class OneLibraryMode(StrEnum):
+    AUTO = "auto"  # write it when the stick already has one
+    ON = "on"
+    OFF = "off"
+
+
 @dataclass
 class UsbWriteOptions:
     copy_missing: bool = True  # copy tracks that aren't on the stick into /Contents
@@ -162,9 +169,9 @@ class UsbWriteOptions:
     device_name: str = ""
     workers: int = 0  # waveform processes; 0 = CPU count
     transcode: bool = True  # convert formats players can't read (Ogg, Opus, WMA...) to MP3
-    # OneLibrary (exportLibrary.db) for CDJ-3000X/XDJ-AZ/OPUS-QUAD etc.: "auto" writes it when the
-    # stick already has one. Experimental: no hardware test of a third-party one is published.
-    onelibrary: str = "auto"
+    # OneLibrary (exportLibrary.db) for CDJ-3000X/XDJ-AZ/OPUS-QUAD etc.
+    # Experimental: no hardware test of a third-party one is published.
+    onelibrary: OneLibraryMode = OneLibraryMode.AUTO
 
 
 @dataclass
@@ -234,7 +241,7 @@ def _transcode(local: Path, track: Track, root: Path) -> tuple[str, bool]:
     dest.parent.mkdir(parents=True, exist_ok=True)
     partial = dest.with_name(dest.stem + ".part.mp3")
     subprocess.run(
-        ["ffmpeg", "-nostdin", "-v", "error", "-y", "-i", str(local), "-map", "0:a:0",
+        [waveform.ffmpeg() or "ffmpeg", "-nostdin", "-v", "error", "-y", "-i", str(local), "-map", "0:a:0",
          "-c:a", "libmp3lame", "-b:a", "320k", "-map_metadata", "0", str(partial)],
         check=True,
         capture_output=True,
@@ -580,7 +587,9 @@ def write_rekordbox_usb(
         rekordbox_dir / "exportExt.pdb", stamp, result, "its My Tags refer to the old track ids"
     )
     one_library = rekordbox_dir / "exportLibrary.db"
-    if options.onelibrary == "on" or (options.onelibrary == "auto" and one_library.exists()):
+    if options.onelibrary == OneLibraryMode.ON or (
+        options.onelibrary == OneLibraryMode.AUTO and one_library.exists()
+    ):
         from .onelibrary import write_onelibrary
 
         if one_library.exists():
