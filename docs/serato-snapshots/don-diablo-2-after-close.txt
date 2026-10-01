@@ -1,0 +1,39 @@
+# [༺HASA༻] Don Diablo - The Way I Are.mp3 (after closing Serato with the track still loaded)
+
+taken:    2026-10-01 22:44:48
+modified: 2026-10-01 22:44:35
+size:     9312186 bytes
+sha256 of audio+tags: 5aa4ec6e8a85503e
+
+ID3 v2.4, 25 frames:
+  APIC:"Album cover": 1832267 bytes of binary
+  COMM::XXX: https://soundcloud.com/user-95
+  COMM:ID3v1 Comment:eng: https://soundcloud.com/user-
+  GEOB:Serato Autotags: 22 bytes of binary
+  GEOB:Serato BeatGrid: 14 bytes, 1 marker(s): [GridMarker(position_s=0.09191609919071198, bpm=125.98999786376953, beats_to_next=None)]
+  GEOB:Serato Markers2: 470 bytes
+      hot cue 2: 64.695 s, colour #cc8800, name ''
+      hot cue 4: 116.995 s, colour #cccc00, name ''
+      track_colour: 16777215
+      bpm_locked: False
+      other: []
+  GEOB:Serato Markers_: 318 bytes, 2 cues, 0 loops (older copy of the cues)
+  GEOB:Serato Overview: 3842 bytes of binary
+  RVA2:SeratoGain: Master volume: +0.0000 dB/0.0000
+  TBPM: 125.990000
+  TCON: Dance & EDM
+  TDRC: 2025
+  TIT2: Don Diablo - The Way I Are
+  TKEY: 1A
+  TLEN: 186827
+  TPE1: ༺HASA༻
+  TSSE: Lavf61.1.100
+  TXXX:Serato Analysis Flags: AAAAAAAAACA=
+
+  TXXX:comment: https://soundcloud.com/user-951151762/don-diablo-the-way-i-are
+  TXXX:compatible_brands: isomiso2mp41
+  TXXX:description: New release 🔥🔥
+  TXXX:major_brand: isom
+  TXXX:minor_version: 512
+  TXXX:purl: https://soundcloud.com/user-951151762/don-diablo-the-way-i-are
+  TXXX:synopsis: New release 🔥🔥

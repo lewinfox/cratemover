@@ -1,0 +1,24 @@
+# [༺HASA༻] Don Diablo - The Way I Are.mp3 (before closing Serato, track still loaded)
+
+taken:    2026-10-01 22:44:16
+modified: 2026-10-01 04:12:04
+size:     9307146 bytes
+sha256 of audio+tags: 574508c903a27533
+
+ID3 v2.4, 16 frames:
+  APIC:"Album cover": 1832267 bytes of binary
+  COMM::XXX: https://soundcloud.com/user-95
+  COMM:ID3v1 Comment:eng: https://soundcloud.com/user-95
+  TCON: Dance & EDM
+  TDRC: 2025
+  TIT2: Don Diablo - The Way I Are
+  TKEY: 1A
+  TPE1: ༺HASA༻
+  TSSE: Lavf61.1.100
+  TXXX:comment: https://soundcloud.com/user-951151762/don-diablo-the-way-i-are
+  TXXX:compatible_brands: isomiso2mp41
+  TXXX:description: New release 🔥🔥
+  TXXX:major_brand: isom
+  TXXX:minor_version: 512
+  TXXX:purl: https://soundcloud.com/user-951151762/don-diablo-the-way-i-are
+  TXXX:synopsis: New release 🔥🔥

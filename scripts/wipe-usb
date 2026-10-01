@@ -1,0 +1,78 @@
+#!/usr/bin/env bash
+# Wipe a USB stick back to a fresh FAT32 state: one MBR partition, FAT32, labelled.
+# MBR rather than GPT because CDJ-2000NXS2 and older players only read MBR sticks.
+#
+#   scripts/wipe-usb /dev/sda [LABEL]     # asks you to type the device name to confirm
+#
+# The label defaults to 4 random characters, so each wiped stick looks new to DJ software that
+# remembers sticks by name (Serato 4 keeps a list of a stick's tracks on the computer).
+#   scripts/wipe-usb --yes /dev/sda       # no prompt (still refuses anything not a USB stick)
+#
+# Needs sudo for the partitioning and formatting. Remounts the stick at /media/$USER/LABEL.
+set -euo pipefail
+
+yes=0
+if [[ ${1:-} == --yes ]]; then yes=1; shift; fi
+dev=${1:?usage: wipe-usb [--yes] /dev/sdX [LABEL]}
+label=${2:-$(od -An -N4 -tu1 /dev/urandom | awk '{for (i = 1; i <= 4; i++) printf "%c", substr("ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789", $i % 36 + 1, 1)}')}
+
+die() { echo "wipe-usb: $*" >&2; exit 1; }
+
+[[ -b $dev ]] || die "$dev is not a block device"
+[[ $(lsblk -dno TYPE "$dev") == disk ]] || die "$dev is a partition; give the whole disk (e.g. /dev/sda)"
+[[ $(lsblk -dno TRAN "$dev") == usb ]] || die "$dev is not on USB"
+[[ $(lsblk -dno RM "$dev" | tr -d ' ') == 1 ]] || die "$dev is not a removable drive"
+size=$(lsblk -dbno SIZE "$dev")
+(( size <= 256 * 1024 ** 3 )) || die "$dev is over 256 GB; that's not a test stick"
+[[ ${#label} -le 11 && $label =~ ^[A-Z0-9_-]+$ ]] || die "label must be up to 11 of A-Z 0-9 _ -"
+
+echo "About to erase everything on:"
+lsblk -o PATH,SIZE,FSTYPE,LABEL,MOUNTPOINTS,MODEL "$dev"
+while read -r mp; do
+    [[ -n $mp ]] || continue
+    case $mp in /|/boot*|/home*|/usr*|/var*) die "$dev has $mp mounted";; esac
+    echo; echo "Top level of $mp:"; ls -A "$mp" | sed 's/^/  /'
+done < <(lsblk -lno MOUNTPOINTS "$dev")
+
+if (( ! yes )); then
+    echo
+    read -rp "Type ${dev##*/} to erase it: " answer
+    [[ $answer == "${dev##*/}" ]] || die "not confirmed; nothing changed"
+fi
+
+for part in $(lsblk -lnpo PATH,TYPE "$dev" | awk '$2 == "part" {print $1}'); do
+    if [[ -n $(lsblk -no MOUNTPOINTS "$part") ]]; then
+        udisksctl unmount -b "$part" >/dev/null 2>&1 || sudo umount "$part"
+    fi
+done
+
+sudo wipefs -aq "$dev"
+echo 'label: dos
+start=2048, type=c' | sudo sfdisk -q "$dev"
+sudo udevadm settle
+part=$(lsblk -lnpo PATH,TYPE "$dev" | awk '$2 == "part" {print $1; exit}')
+[[ -n $part ]] || die "no partition appeared on $dev"
+sudo mkfs.vfat -F 32 -n "$label" "$part" >/dev/null
+sudo udevadm settle
+
+# Unplug and replug the stick in software, so the desktop (e.g. the Ubuntu dock) forgets the old
+# name and sees a new stick. The USB device is the nearest parent with an `authorized` switch.
+usb=$(readlink -f "/sys/block/${dev##*/}/device")
+while [[ $usb != / && ! ( -f $usb/authorized && -f $usb/idVendor ) ]]; do usb=$(dirname "$usb"); done
+if [[ $usb != / ]]; then
+    echo 0 | sudo tee "$usb/authorized" >/dev/null
+    sleep 1
+    echo 1 | sudo tee "$usb/authorized" >/dev/null
+fi
+
+# It may come back under a different name (sdb), so find it by its new label.
+part=
+for _ in $(seq 30); do
+    part=$(readlink -f "/dev/disk/by-label/$label" 2>/dev/null) && [[ -b $part ]] && break
+    part=
+    sleep 0.5
+done
+[[ -n $part ]] || die "formatted, but the stick didn't come back; unplug it and plug it in"
+sleep 2  # give the desktop a moment to mount it
+[[ -n $(lsblk -no MOUNTPOINTS "$part") ]] || udisksctl mount -b "$part" >/dev/null 2>&1 || true
+echo "Done: $part is FAT32 '$label', mounted at $(lsblk -no MOUNTPOINTS "$part")"

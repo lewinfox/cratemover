@@ -1,0 +1,161 @@
+#!/usr/bin/env -S uv run --quiet python
+"""Report what Serato and the USB sticks hold right now, for step-by-step testing.
+
+    scripts/serato-state                 # report
+    scripts/serato-state > before.txt    # save a snapshot to diff later
+
+Shows: whether Serato is running; per stick, every file with its time and size, the crates in
+its _Serato_ folder and the hot cues in each audio file; on the computer, the crates in Serato
+4's master.sqlite and in ~/Music/_Serato_. Read only: databases are copied before reading.
+
+SERATO_PREFIX (default ~/git/serato-linux/data/prefix) and MUSIC (default ~/Music) override
+where the computer's Serato lives.
+"""
+
+from __future__ import annotations
+
+import os
+import shutil
+import sqlite3
+import subprocess
+import tempfile
+import time
+from pathlib import Path
+
+from mutagen.id3 import ID3, ID3NoHeaderError
+
+from cratemover.serato.binfile import parse
+from cratemover.serato.markers import decode_markers2_id3
+
+PREFIX = Path(os.environ.get("SERATO_PREFIX", Path.home() / "git/serato-linux/data/prefix"))
+MUSIC = Path(os.environ.get("MUSIC", Path.home() / "Music"))
+LIBRARY = PREFIX / "drive_c/users/dj/AppData/Local/Serato/Library"
+AUDIO = {".mp3", ".flac", ".wav", ".aif", ".aiff", ".m4a", ".ogg"}
+
+
+def when(path: Path) -> str:
+    return time.strftime("%H:%M:%S", time.localtime(path.stat().st_mtime))
+
+
+def cues(path: Path) -> str:
+    if path.suffix.lower() != ".mp3":
+        return "(cues: only MP3 checked)"
+    try:
+        tags = ID3(path)
+    except (ID3NoHeaderError, OSError):
+        return "no tags"
+    frame = tags.get("GEOB:Serato Markers2")
+    if frame is None:
+        return "no Serato cues"
+    found = decode_markers2_id3(frame.data).cues
+    return f"{len(found)} hot cue(s): " + ", ".join(
+        f"{c.index + 1}@{c.position_ms / 1000:.1f}s" for c in sorted(found, key=lambda c: c.index)
+    )
+
+
+def local(path: str, drive: Path) -> Path:
+    """A Serato track path (relative to its drive) as a file here."""
+    if path.startswith("users/dj/Music/"):
+        return MUSIC / path.removeprefix("users/dj/Music/")
+    if drive == Path("/"):  # master.sqlite also lists sticks' tracks, relative to the stick
+        found = [s / path for s in sticks() if (s / path).is_file()]
+        return found[0] if found else drive / path
+    return drive / path
+
+
+def sticks() -> list[Path]:
+    return sorted(p for p in Path("/media", os.environ.get("USER", "")).glob("*") if p.is_dir())
+
+
+def track_line(path: str, drive: Path) -> str:
+    f = local(path, drive)
+    return f"      {path}  [{cues(f) if f.is_file() else 'FILE NOT FOUND'}]"
+
+
+def crate_files(serato: Path) -> None:
+    crates = sorted((serato / "Subcrates").glob("*.crate"))
+    db = serato / "database V2"
+    if db.is_file():
+        tracks = [
+            s.value for f in parse(db.read_bytes()) if f.tag == "otrk" for s in f.value
+            if s.tag == "pfil"
+        ]  # fmt: skip
+        print(f"  database V2 ({when(db)}): {len(tracks)} track(s)")
+    else:
+        print("  database V2: none")
+    if not crates:
+        print("  crate files: none")
+    for crate in crates:
+        tracks = [
+            s.value for f in parse(crate.read_bytes()) if f.tag == "otrk" for s in f.value
+            if s.tag == "ptrk"
+        ]  # fmt: skip
+        print(f"  crate {crate.stem} ({when(crate)}): {len(tracks)} track(s)")
+        for t in tracks:
+            print(track_line(t, serato.parent))
+
+
+def sqlite_crates(db: Path, label: str, drive: Path) -> None:
+    if not db.is_file():
+        print(f"  {label}: none")
+        return
+    with tempfile.TemporaryDirectory() as tmp:
+        for f in db.parent.glob(db.name + "*"):  # the -wal file holds recent changes
+            shutil.copy(f, tmp)
+        con = sqlite3.connect(Path(tmp) / db.name)
+        if con.execute("select 1 from sqlite_master where name = 'location_container'").fetchone():
+            # the computer's master.sqlite: crates link to tracks through location_container
+            query = (
+                "select cn.name, a.portable_id from container_asset ca"
+                " join location_container lc on lc.id = ca.location_container_id"
+                " join container cn on cn.id = lc.container_id"
+                " join asset a on a.id = ca.asset_id where cn.type = 1 order by cn.name"
+            )
+        else:
+            # a stick's location.sqlite: crates link to tracks through space_asset
+            query = (
+                "select cn.name, a.portable_id from container_asset ca"
+                " join container cn on cn.id = ca.container_id"
+                " join space_asset sa on sa.id = ca.space_asset_id"
+                " join asset a on a.id = sa.asset_id where cn.type = 1 order by cn.name"
+            )
+        rows = con.execute(query).fetchall()
+        assets = con.execute("select count(*) from asset").fetchone()[0]
+        con.close()
+    print(f"  {label} ({when(db)}): {assets} track(s), {len(rows)} crate entr(ies)")
+    for name, path in rows:
+        print(f"    {name}:")
+        print(track_line(path, drive))
+
+
+def main() -> None:
+    running = subprocess.run(
+        ["docker", "ps", "--format", "{{.Names}}"], capture_output=True, text=True
+    ).stdout.split()
+    print(f"Serato running: {'yes' if 'serato' in running else 'no'}   ({time.strftime('%H:%M:%S')})")
+
+    mounted = sticks()
+    for stick in mounted:
+        print(f"\nStick {stick}")
+        for f in sorted(stick.rglob("*")):
+            rel = f.relative_to(stick)
+            if rel.parts[0].startswith(".Trash"):
+                continue
+            size = "" if f.is_dir() else f"{f.stat().st_size:>10}"
+            extra = f"  [{cues(f)}]" if f.suffix.lower() in AUDIO else ""
+            print(f"  {when(f)} {size:>10}  {rel}{'/' if f.is_dir() else ''}{extra}")
+        if (stick / "_Serato_").is_dir():
+            crate_files(stick / "_Serato_")
+            sqlite_crates(stick / "_Serato_/Library/location.sqlite", "location.sqlite", stick)
+    if not mounted:
+        print("\nNo stick mounted")
+
+    print(f"\nComputer ({MUSIC / '_Serato_'}, {LIBRARY})")
+    if (MUSIC / "_Serato_").is_dir():
+        crate_files(MUSIC / "_Serato_")
+    else:
+        print("  _Serato_: none")
+    sqlite_crates(LIBRARY / "master.sqlite", "master.sqlite", Path("/"))
+
+
+main()
