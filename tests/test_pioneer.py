@@ -10,6 +10,7 @@ from conftest import FIXTURES, needs_ffmpeg
 from oracles.rekordbox_pdb import Database
 
 from cratemover.convert import ReadOptions, WriteOptions, read_library, write_library
+from cratemover.keys import KeyNotation
 from cratemover.model import CueRole, Format
 from cratemover.pioneer import anlz
 from cratemover.pioneer.pdb import decode_string, encode_string, read_pdb, write_pdb
@@ -234,3 +235,26 @@ def test_onelibrary_written_alongside(library_copy: Path, tmp_path: Path) -> Non
     )
     con.close()
     shutil.rmtree(stick / "PIONEER/USBANLZ")
+
+
+def test_stick_keys_are_camelot(library_copy: Path, tmp_path: Path) -> None:
+    # rekordbox 7.2.19 marked a stick broken whose key table said Cm, Bb, Abm, and read the
+    # same stick with 5A, 6B, 1A (stick 9HKT, 2026-10-02).
+    import re
+
+    stick = tmp_path / "stick"
+    stick.mkdir()
+    source = read_library(ReadOptions(Format.MIXXX, str(library_copy / "mixxx")))
+    assert any(t.key for t in source.tracks.values())
+    write_library(
+        source,
+        WriteOptions(
+            Format.REKORDBOX_USB,
+            str(stick),
+            key_notation=KeyNotation.MUSICAL,  # asked for musical: still Camelot on a stick
+            waveforms=False,
+        ),
+        [],
+    )
+    keys = read_pdb((stick / "PIONEER/rekordbox/export.pdb").read_bytes()).keys
+    assert keys and all(re.fullmatch(r"(1[0-2]|[1-9])[AB]", name) for name in keys.values())

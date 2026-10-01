@@ -164,7 +164,6 @@ class OneLibraryMode(StrEnum):
 @dataclass
 class UsbWriteOptions:
     copy_missing: bool = True  # copy tracks that aren't on the stick into /Contents
-    key_notation: KeyNotation = KeyNotation.MUSICAL
     waveforms: bool = True  # measure waveforms with ffmpeg (else reuse or placeholders)
     device_name: str = ""
     workers: int = 0  # waveform processes; 0 = CPU count
@@ -464,7 +463,10 @@ def write_rekordbox_usb(
             continue
         track_id = len(items) + 1
         ids[track.id] = track_id
-        key_name = format_key(track.key, options.key_notation)
+        # Always Camelot, as rekordbox's own exports: rekordbox 7.2.19 crashed and marked a stick
+        # broken (brokendb) whose key table said Cm, Bb, Abm; the same stick with 5A, 6B, 1A
+        # loaded fine (stick 9HKT, 2026-10-02; docs/usb-compatibility.md).
+        key_name = format_key(track.key, KeyNotation.CAMELOT)
         colour = rekordbox_track_colour(track.colour)
         row = TrackRow(
             id=track_id,

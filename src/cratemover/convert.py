@@ -323,7 +323,6 @@ def write_library(
             out,
             UsbWriteOptions(
                 copy_missing=options.copy_missing,
-                key_notation=options.key_notation or KeyNotation.MUSICAL,
                 waveforms=options.waveforms,
                 device_name=options.device_name,
                 onelibrary=options.onelibrary,
