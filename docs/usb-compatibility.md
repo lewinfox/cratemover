@@ -33,12 +33,12 @@ Stick: 32 GB, reset before every test with `scripts/wipe-usb /dev/sdX` (one MBR 
 
 | Written by ↓ / read in →                               | Rekordbox | Serato | Mixxx | cratemover |
 | ------------------------------------------------------ | :-------: | :----: | :---: | :--------: |
-| Rekordbox export                                       |    OK     |   X    |  OK   |     OK     |
-| Serato (drag crates to the stick and "Copy")           |     X     |   OK   |  OK   |     OK     |
+| Rekordbox export                                       |    OK     |  N/A   |  OK   |     OK     |
+| Serato (drag crates to the stick and "Copy")           |    N/A    |   OK   |  OK   |     OK     |
 | cratemover: Mixxx → Rekordbox USB                      |     —     |   —    |   —   |     —      |
 | cratemover: Mixxx → Serato                             |     —     |   —    |   —   |     —      |
-| cratemover: convert Rekordbox stick → + Serato         |     —     |   —    |   —   |     —      |
-| cratemover: convert Serato stick → + Rekordbox         |     —     |   —    |   —   |     —      |
+| cratemover: convert Rekordbox stick → + Serato         |    N/A    |   —    |   —   |     —      |
+| cratemover: convert Serato stick → + Rekordbox         |    OK     |  N/A   |  OK   |     OK     |
 | cratemover: sync into an existing Rekordbox stick (#1) |     —     |   —    |   —   |     —      |
 
 Notes:
@@ -73,6 +73,27 @@ What "works" means for each reader:
   `master.sqlite` at once but rewrites the old-style files only later (seen: a track added to a
   crate at 22:39 was still missing from its `.crate` file). So reading `_Serato_` while Serato is
   open can give stale crates. Close Serato before converting.
+- **2026-10-01, Serato → Rekordbox (cratemover convert):** Rekordbox 7.2.19 read the converted
+  stick fine. On opening it, Rekordbox wrote to the stick by itself: rewrote `export.pdb`, and
+  added `exportExt.pdb`, a OneLibrary database (`exportLibrary.db`, with `-wal`/`-shm` while
+  open), `DEVSETTING.DAT`, `MYSETTING.DAT`, `MYSETTING2.DAT`, `DJMMYSETTING.DAT`,
+  `djprofile.nxs` and `extracted/gcred.dat`. So it showed a OneLibrary section although we didn't
+  write one.
+- **2026-10-01, Rekordbox track lifecycle:** unlike Serato, Rekordbox saves edits to a stick's
+  tracks straight away. Moving Uptown Funk's main cue rewrote that track's analysis files
+  (`.DAT`/`.EXT`) within a minute, as a memory cue at the new spot; the other track's files were
+  untouched. Rekordbox keeps cues in the analysis files and its databases, not in the audio.
+- **2026-10-01, Rekordbox export (stick C9YD, 3 tracks, memory cues):** rekordbox 7.2.19 writes
+  both `export.pdb` and OneLibrary (`exportLibrary.db`). OneLibrary's `cue` table stays empty
+  even with cues set: cues are only in the analysis files. Compared with cratemover's OneLibrary
+  for the same `export.pdb`, the schema is identical. Aligned to rekordbox 7.2.19:
+  `property.dbVersion` `1000` (a rekordbox 6.8.6 export had `10000`, so it depends on the
+  version), `createdDate` set, `isHotCueAutoLoadOn` 0, missing album or label `NULL` not 0,
+  album artist set. Still different: artwork (#4); My Tags (rekordbox copies the user's tags;
+  we write only the 4 default categories); `myTagMasterDBID` (identifies the user's collection;
+  ours is random); `content.dateAdded`, which rekordbox takes from the collection's
+  `StockDate` (date added to the collection) while `export.pdb` holds `DateCreated`. Converting
+  from `export.pdb` can't recover `StockDate`.
 
 ## 3. What breaks a good stick
 
