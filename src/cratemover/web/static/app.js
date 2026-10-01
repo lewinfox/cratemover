@@ -562,7 +562,7 @@ async function runDriveConvert() {
     });
     const r = await waitForJob(job_id, status);
     $("cv-report").innerHTML = `<p><b>Converted to ${escapeHtml(STICK_FORMATS[w.target])}.</b> Backup: <code>${escapeHtml(r.backup)}</code>` +
-      (r.removed.length ? `<br>Removed the old ${escapeHtml(r.removed.join(", "))} library.` : "") + "</p>" + warningList(r.warnings);
+      (r.removed.length ? `<br>Removed the old ${escapeHtml(r.removed.join(", "))} library.` : "") + "</p>" + warningList([...(r.notes || []), ...r.warnings]);
     w.done = true;
     setStatus(status, "Done.");
     await refresh();

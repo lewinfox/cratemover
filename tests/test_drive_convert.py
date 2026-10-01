@@ -17,7 +17,7 @@ from cratemover.drive_convert import (
     restore_drive,
     verify_conversion,
 )
-from cratemover.model import Format, Library, TempoMarker, Track
+from cratemover.model import Cue, CueRole, Format, Library, TempoMarker, Track
 from cratemover.serato.tags import read_tags
 
 
@@ -92,10 +92,13 @@ def test_rekordbox_stick_to_serato_and_restore_tags(library_copy: Path, tmp_path
     )
     assert result.removed == ["PIONEER"]
     assert {lib["format"] for lib in _libraries(stick)} == {Format.SERATO}
+    old = str(mp3.relative_to(stick))
+    assert result.moved[old] == "Peak Time/Alpha - First Light.mp3"  # its first crate's folder
+    moved = stick / result.moved[old]
     assert _stray(stick) == ["rekordbox.xml"]  # written with the stick, not by the conversion
     serato = read_library(ReadOptions(Format.SERATO, str(stick), serato_root=str(stick)))
     assert _hot(serato)["First Light"] == [(0, 250), (1, 4250), (2, 2250)]
-    assert read_tags(mp3).found
+    assert read_tags(moved).found
     restore_drive(Path(result.backup), stick)
     assert {lib["format"] for lib in _libraries(stick)} == {Format.REKORDBOX_USB}
     assert not read_tags(mp3).found  # the Serato tags written by the conversion are gone again
@@ -173,6 +176,10 @@ def test_conversion_matches_its_source_exactly(
         stick, DriveConvertOptions(target=target, backup_dir=str(tmp_path / "b"), waveforms=False)
     )
     after = read_library(ReadOptions(target, str(stick), serato_root=str(stick)))
+    for track in before.tracks.values():  # follow the audio to where the conversion moved it
+        rel = str(Path(track.extra.get("local", track.location)).relative_to(stick))
+        if rel in result.moved:
+            track.location = track.extra["local"] = str(stick / result.moved[rel])
     r = fingerprint.rules(source, target)
     assert fingerprint.check(before, after, stick, r) == []
     assert result.fingerprint == fingerprint.fingerprint(fingerprint.canonical(after, stick, r))
@@ -234,3 +241,27 @@ def test_restore_notices_a_tree_that_changed(library_copy: Path, tmp_path: Path)
     (stick / "stray.txt").write_text("added after the backup, outside the library")
     with pytest.raises(OSError, match="file tree doesn't"):
         restore_drive(Path(result.backup), stick)
+
+
+@needs_ffmpeg
+def test_a_track_in_several_crates_is_stored_once(library_copy: Path, tmp_path: Path) -> None:
+    # Departure from Serato, which copies it into each crate's folder and lists every copy in
+    # every crate (see cratemover.layout).
+    stick = _make_stick(library_copy, tmp_path, Format.REKORDBOX_USB)
+    convert_drive(stick, DriveConvertOptions(target=Format.SERATO, backup_dir=str(tmp_path / "b")))
+    assert len(list(stick.rglob("*First Light.mp3"))) == 1
+    serato = read_library(ReadOptions(Format.SERATO, str(stick), serato_root=str(stick)))
+    first = next(t.id for t in serato.tracks.values() if t.title == "First Light")
+    crates = [p for _, p in serato.playlists.walk() if p.track_ids and first in p.track_ids]
+    assert len(crates) >= 2
+    assert all(p.track_ids.count(first) == 1 for p in crates)
+
+
+def test_notes_say_memory_cues_become_hot_cues_in_serato() -> None:
+    lib = Library("test")
+    lib.add_track(
+        Track("1", "/x.mp3", cues=[Cue(CueRole.CUE, 1000.0), Cue(CueRole.CUE, 5000.0, slot=0)])
+    )
+    [note] = drive_convert.cue_changes(lib, Format.SERATO)
+    assert note.startswith("1 memory cue(s) on 1 track(s) became Serato hot cues")
+    assert drive_convert.cue_changes(lib, Format.REKORDBOX_USB) == []

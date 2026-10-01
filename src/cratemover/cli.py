@@ -82,6 +82,14 @@ def _add_usb_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--device-name", default="")
 
 
+def _note(message: str) -> None:
+    """A warning that isn't an error, in yellow."""
+    line = f"⚠ {message}"
+    if sys.stdout.isatty():
+        line = f"\033[33m{line}\033[0m"
+    print(line)
+
+
 def _outcome(ok: bool, message: str) -> None:
     """A last line that stands out: green for success, red for failure."""
     line = f"{'✔' if ok else '✘'} {message}"
@@ -247,6 +255,8 @@ def main(argv: list[str] | None = None) -> int:
         for warning in result.warnings:
             progress(warning)
         progress(f"Backup: {result.backup}")
+        for note in result.notes:
+            _note(note)
         _outcome(True, f"CONVERTED {args.drive} to {name}, checked track by track")
         return 0
 

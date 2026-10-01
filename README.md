@@ -108,10 +108,14 @@ drive to Serato* next to it in the *USB drives* panel, then *Back up and convert
    uses, byte for byte, to `BACKUP_DIR` on the computer (default `exports/backups`), with a
    checksum for each file; tick *Back up the whole drive* to copy the whole stick instead. It
    checks there's room first. Nothing is backed up onto the stick;
-2. reads the library on the stick, deletes its folder, and writes the other format onto the same
-   stick, pointing at the audio already there (nothing is copied unless a format has to be
-   transcoded, e.g. Ogg to MP3 for Rekordbox), with cues and grids moved for each program's MP3
-   timing;
+2. reads the library on the stick, deletes its folder, moves the audio to where the other program
+   would have put it (Rekordbox: `Contents/<artist>/<album>/`, names cut to 44 characters;
+   Serato: a folder per crate), and writes the other format onto the same stick (nothing is
+   copied unless a format has to be transcoded, e.g. Ogg to MP3 for Rekordbox), with cues and
+   grids moved for each program's MP3 timing. One departure from Serato: a track in several
+   crates is stored once, in its first crate's folder, where Serato's own Copy stores it in
+   every crate's folder and lists every copy in every crate (which looks like a Serato bug).
+   The rules and their evidence are in `src/cratemover/layout.py`;
 3. reads the new library back and checks every track, hot cue, beat grid and playlist made it;
 4. checks nothing else changed on the stick: only the new library (and any transcoded audio) was
    added, only the old library went, and no backup or temporary files are left.
