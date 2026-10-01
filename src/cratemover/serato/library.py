@@ -444,6 +444,7 @@ def _track_fields(track: Track, options: SeratoWriteOptions) -> list[Field]:
         ("tcmp", track.composer),
         ("trmx", track.remixer),
         ("ttyr", track.year),
+        ("ttrk", str(track.track_number) if track.track_number else ""),
         ("tbpm", f"{track.bpm:.2f}" if track.bpm else ""),
         ("tkey", format_key(track.key, options.key_notation)),
     ]

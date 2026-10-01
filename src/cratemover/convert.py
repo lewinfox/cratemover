@@ -183,6 +183,18 @@ class ConvertResult:
         return asdict(self)
 
 
+def _backups_made(folders: list[Path], since: str) -> list[Path]:
+    """``*.cratemover-<stamp>`` files and folders in ``folders`` made at or after ``since``."""
+    found = []
+    for folder in folders:
+        if folder.is_dir():
+            for entry in folder.iterdir():
+                _, sep, made = entry.name.rpartition(".cratemover-")
+                if sep and made >= since:
+                    found.append(entry)
+    return found
+
+
 def _backup(path: Path, stamp: str) -> Path | None:
     if not path.exists():
         return None
@@ -283,10 +295,12 @@ def write_library(
 
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     out = Path(options.output_dir)
+    backup_dirs: list[Path] = []  # where this write may leave *.cratemover-<stamp> backups
     warnings = list(library.warnings)
     files: list[Path] = []
     if options.format == Format.REKORDBOX_XML:
         target = out if out.suffix.lower() == ".xml" else out / "rekordbox.xml"
+        backup_dirs.append(target.parent)
         if options.in_place:
             _backup(target, stamp)
         rb = write_rekordbox_xml(
@@ -301,6 +315,8 @@ def write_library(
         files, warnings = rb.files, warnings + rb.warnings
     elif options.format == Format.REKORDBOX_USB:
         from .pioneer.usb import UsbWriteOptions, write_rekordbox_usb
+
+        backup_dirs.append(out / "PIONEER" / "rekordbox")
 
         usb = write_rekordbox_usb(
             library,
@@ -331,6 +347,7 @@ def write_library(
             except FileNotFoundError:
                 serato_dir = out / "_Serato_"
             out = serato_dir.parent
+            backup_dirs.append(serato_dir)
             base = serato_dir / DATABASE_FILE
             _backup(base, stamp)
             _backup(serato_dir / CRATE_DIR, stamp)
@@ -378,6 +395,7 @@ def write_library(
         )
         if options.in_place:
             db_path = find_database(out)
+            backup_dirs.append(db_path.parent)
             _backup(db_path, stamp)
             mixxx_options.base_database = db_path
             mixxx_options.replace_playlists = True
@@ -396,8 +414,12 @@ def write_library(
         warnings.append(
             f"{missing} of {len(local)} track file(s) were not found locally (check the file access rules)."
         )
-    if options.in_place:
-        warnings.append(f"Backups of the previous files end in .cratemover-{stamp}.")
+    backups = _backups_made(backup_dirs, stamp)
+    if backups:
+        warnings.append(
+            f"Backed up {len(backups)} previous file(s) next to the originals: "
+            + ", ".join(sorted(b.name for b in backups))
+        )
     return ConvertResult([str(f) for f in files], library.summary(), warnings)
 
 

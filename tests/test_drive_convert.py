@@ -1,12 +1,13 @@
 from __future__ import annotations
 
+import json
 import shutil
 from pathlib import Path
 
 import pytest
 from conftest import FIXTURES, needs_ffmpeg
 
-from cratemover import drive_convert
+from cratemover import drive_convert, fingerprint
 from cratemover.convert import ReadOptions, WriteOptions, read_library, write_library
 from cratemover.devices import _libraries
 from cratemover.drive_convert import (
@@ -16,7 +17,7 @@ from cratemover.drive_convert import (
     restore_drive,
     verify_conversion,
 )
-from cratemover.model import Format
+from cratemover.model import Format, Library, TempoMarker, Track
 from cratemover.serato.tags import read_tags
 
 
@@ -62,6 +63,7 @@ def test_serato_stick_to_rekordbox_replaces_the_library(library_copy: Path, tmp_
     assert result.removed == ["_Serato_"]
     assert {lib["format"] for lib in _libraries(stick)} == {Format.REKORDBOX_USB}
     assert _stray(stick) == []
+    assert not any("Backed up" in w or ".cratemover-" in w for w in result.warnings)
     assert not (stick / "PIONEER/rekordbox/exportLibrary.db").exists()  # OneLibrary is opt-in
     rekordbox = read_library(ReadOptions(Format.REKORDBOX_USB, str(stick)))
     expected = {
@@ -84,6 +86,7 @@ def test_rekordbox_stick_to_serato_and_restore_tags(library_copy: Path, tmp_path
     stick = _make_stick(library_copy, tmp_path, Format.REKORDBOX_USB)
     mp3 = next((stick / "Contents").rglob("*First Light.mp3"))
     assert not read_tags(mp3).found
+    before = {str(p.relative_to(stick)): p.read_bytes() for p in stick.rglob("*") if p.is_file()}
     result = convert_drive(
         stick, DriveConvertOptions(target=Format.SERATO, backup_dir=str(tmp_path / "backups"))
     )
@@ -96,6 +99,8 @@ def test_rekordbox_stick_to_serato_and_restore_tags(library_copy: Path, tmp_path
     restore_drive(Path(result.backup), stick)
     assert {lib["format"] for lib in _libraries(stick)} == {Format.REKORDBOX_USB}
     assert not read_tags(mp3).found  # the Serato tags written by the conversion are gone again
+    after = {str(p.relative_to(stick)): p.read_bytes() for p in stick.rglob("*") if p.is_file()}
+    assert after == before  # every file, audio included, byte for byte
     assert _hot(read_library(ReadOptions(Format.REKORDBOX_USB, str(stick))))["First Light"] == [
         (0, 250),
         (1, 4250),
@@ -155,6 +160,31 @@ def test_a_failed_check_puts_the_stick_back(
 
 
 @needs_ffmpeg
+@pytest.mark.parametrize(
+    ("source", "target"),
+    [(Format.SERATO, Format.REKORDBOX_USB), (Format.REKORDBOX_USB, Format.SERATO)],
+)
+def test_conversion_matches_its_source_exactly(
+    library_copy: Path, tmp_path: Path, source: Format, target: Format
+) -> None:
+    stick = _make_stick(library_copy, tmp_path, source)
+    before = read_library(ReadOptions(source, str(stick), serato_root=str(stick)))
+    result = convert_drive(
+        stick, DriveConvertOptions(target=target, backup_dir=str(tmp_path / "b"), waveforms=False)
+    )
+    after = read_library(ReadOptions(target, str(stick), serato_root=str(stick)))
+    r = fingerprint.rules(source, target)
+    assert fingerprint.check(before, after, stick, r) == []
+    assert result.fingerprint == fingerprint.fingerprint(fingerprint.canonical(after, stick, r))
+    manifest = json.loads((Path(result.backup) / "manifest.json").read_text())
+    assert manifest["converted_to"] == {
+        "format": target,
+        "fingerprint": result.fingerprint,
+        "fingerprint_schema": fingerprint.SCHEMA,
+    }
+
+
+@needs_ffmpeg
 def test_verify_catches_a_cue_that_drifted(library_copy: Path, tmp_path: Path) -> None:
     stick = _make_stick(library_copy, tmp_path, Format.SERATO)
     serato = read_library(ReadOptions(Format.SERATO, str(stick), serato_root=str(stick)))
@@ -164,8 +194,43 @@ def test_verify_catches_a_cue_that_drifted(library_copy: Path, tmp_path: Path) -
             target=Format.REKORDBOX_USB, backup_dir=str(tmp_path / "b"), waveforms=False
         ),
     )
-    assert verify_conversion(stick, serato, Format.REKORDBOX_USB) == []
+    assert verify_conversion(stick, serato, Format.SERATO, Format.REKORDBOX_USB)[0] == []
     first = next(t for t in serato.tracks.values() if t.title == "First Light")
-    first.hot_cues[0].position_ms += 5  # 5 ms off, on a file that wasn't converted to MP3
-    [problem] = verify_conversion(stick, serato, Format.REKORDBOX_USB)
-    assert "hot cue 1 moved" in problem
+    first.hot_cues[0].position_ms += 1  # 1 ms off, on a file that wasn't converted to MP3
+    [problem] = verify_conversion(stick, serato, Format.SERATO, Format.REKORDBOX_USB)[0]
+    assert "first light/cues" in problem
+
+
+def test_fingerprints_carry_the_schema_version() -> None:
+    form = fingerprint.canonical(
+        Library("empty"), Path("/"), fingerprint.rules(Format.SERATO, Format.MIXXX)
+    )
+    assert form["schema"] == fingerprint.SCHEMA
+    assert fingerprint.fingerprint(form) != fingerprint.fingerprint(form | {"schema": 0})
+
+
+def test_grids_compare_by_where_the_beats_fall() -> None:
+    r = fingerprint.rules(Format.SERATO, Format.REKORDBOX_USB)
+
+    def grid(position: float, beat: int) -> list[dict]:  # type: ignore[type-arg]
+        track = Track("1", "/x.mp3", grid=[TempoMarker(position, 123.0, beat)])
+        return fingerprint._track(track, r, [], 0.0)["grid"]
+
+    # Serato starts this grid on a downbeat at 558.8 ms; Rekordbox one beat earlier, as beat 4.
+    assert grid(558.8, 1) == grid(71.0, 4)
+    assert grid(558.8, 1) != grid(71.0, 1)  # same beats, but the downbeats moved: a real change
+    assert grid(558.8, 1) != grid(560.8, 1)  # 2 ms off
+
+
+@needs_ffmpeg
+def test_restore_notices_a_tree_that_changed(library_copy: Path, tmp_path: Path) -> None:
+    stick = _make_stick(library_copy, tmp_path, Format.SERATO)
+    result = convert_drive(
+        stick,
+        DriveConvertOptions(
+            target=Format.REKORDBOX_USB, backup_dir=str(tmp_path / "b"), waveforms=False
+        ),
+    )
+    (stick / "stray.txt").write_text("added after the backup, outside the library")
+    with pytest.raises(OSError, match="file tree doesn't"):
+        restore_drive(Path(result.backup), stick)

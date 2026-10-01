@@ -74,5 +74,42 @@ def sections_from_beats(
     return sections
 
 
+def fit_sections(
+    beats: list[tuple[float, int, float]], tolerance_ms: float = 1.0
+) -> list[TempoMarker]:
+    """Tempo sections that put every beat within ``tolerance_ms`` of where it was.
+
+    ``beats`` are (position in ms, beat-in-bar, labelled BPM), one per beat, as Rekordbox
+    stores them: positions in whole milliseconds, BPM labels rounded to 0.01. The label isn't
+    precise enough to rebuild the grid (a beat labelled 128.00 can really be 127.995 and drift
+    a few ms over a minute), so each section's tempo comes from the beat positions: the
+    section runs as long as one straight line through its beats fits them all, and a new one
+    starts where the label changes or the beats leave the line.
+    """
+    markers: list[TempoMarker] = []
+    i = 0
+    while i < len(beats):
+        start, beat_in_bar, label = beats[i]
+        lo, hi = 0.0, float("inf")  # beat lengths (ms) that keep every beat so far on the line
+        j = i
+        while j + 1 < len(beats) and beats[j + 1][2] == label:
+            n = j + 1 - i
+            offset = beats[j + 1][0] - start
+            new_lo, new_hi = (
+                max(lo, (offset - tolerance_ms) / n),
+                min(hi, (offset + tolerance_ms) / n),
+            )
+            if new_lo > new_hi:
+                break
+            lo, hi, j = new_lo, new_hi, j + 1
+        # The label when it fits every beat (it usually does), else the middle of what fits.
+        beat_ms = 60000.0 / label
+        if j > i and not lo <= beat_ms <= hi:
+            beat_ms = (lo + hi) / 2
+        markers.append(TempoMarker(start, 60000.0 / beat_ms, beat_in_bar))
+        i = j + 1
+    return markers
+
+
 def shift(grid: list[TempoMarker], ms: float) -> list[TempoMarker]:
     return [TempoMarker(m.position_ms + ms, m.bpm, m.beat) for m in grid]

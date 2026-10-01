@@ -9,17 +9,17 @@
 * nothing else is put on the drive: no ``rekordbox.xml``, no ``*.cratemover-*`` backups, no
   files moved aside. It refuses a drive that already has a Y library, so there's never an old
   Y to back up or merge with;
-* the backup goes on the computer (``backup_dir``): the library folders and, for every audio
-  file whose Serato tags will change, the original tag values, so a restore is exact without
-  copying the audio; ``full`` copies the whole drive instead.
+* the backup goes on the computer (``backup_dir``): a byte-for-byte copy of the library folder
+  and every audio file the library uses (``full``: every file on the drive), with each file's
+  checksum. A restore copies them back and checks every checksum.
 
 ``restore_drive`` puts a backup back.
 """
 
 from __future__ import annotations
 
-import base64
 import contextlib
+import hashlib
 import json
 import os
 import shutil
@@ -29,22 +29,17 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from . import fingerprint
 from .convert import ReadOptions, WriteOptions, read_library, write_library
 from .devices import _libraries
-from .model import Format, Library, Track
+from .fingerprint import SCHEMA as FINGERPRINT_SCHEMA
+from .model import Format, Library
 from .offsets import Mp3Decoder
-from .pioneer.usb import TRANSCODE_OFFSET_MS, OneLibraryMode
+from .pioneer.usb import OneLibraryMode
 
 Progress = Callable[[str], None]
 LIBRARY_DIRS = ("PIONEER", ".PIONEER", "_Serato_")
 TARGETS = (Format.REKORDBOX_USB, Format.SERATO)
-_SERATO_ID3 = ("GEOB:Serato Markers2", "GEOB:Serato Markers_", "GEOB:Serato BeatGrid")
-_SERATO_VORBIS = ("SERATO_MARKERS_V2", "SERATO_BEATGRID", "SERATO_MARKERS2")
-_SERATO_MP4 = (
-    "----:com.serato.dj:markersv2",
-    "----:com.serato.dj:markers",
-    "----:com.serato.dj:beatgrid",
-)
 
 
 @dataclass
@@ -65,6 +60,9 @@ class DriveConvertResult:
     written: dict[str, dict[str, Any]] = field(default_factory=dict)
     removed: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
+    # The new library's fingerprint (cratemover.fingerprint, schema fingerprint_schema)
+    fingerprint: str = ""
+    fingerprint_schema: int = FINGERPRINT_SCHEMA
 
     def as_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -87,88 +85,67 @@ def _drive_size(root: Path) -> int:
     return total
 
 
-# --- Serato tag snapshots ----------------------------------------------------------------
-
-
-def _snapshot_tags(path: Path) -> dict[str, str | None]:
-    """The current Serato tag values of one file (base64 of the raw value, or None)."""
-    import mutagen
-    from mutagen.mp4 import MP4FreeForm
-
-    audio = mutagen.File(path)
-    tags = audio.tags if audio is not None else None
-    snap: dict[str, str | None] = {}
-    suffix = path.suffix.lower()
-    if suffix in (".mp3", ".aif", ".aiff", ".wav"):
-        for key in _SERATO_ID3:
-            frame = tags.get(key) if tags is not None else None
-            snap[key] = base64.b64encode(frame.data).decode() if frame is not None else None
-    elif suffix in (".flac", ".ogg"):
-        for key in _SERATO_VORBIS:
-            values = tags.get(key) if tags is not None else None
-            snap[key] = base64.b64encode(values[0].encode()).decode() if values else None
-    elif suffix in (".m4a", ".mp4"):
-        for key in _SERATO_MP4:
-            values = tags.get(key) if tags is not None else None
-            snap[key] = base64.b64encode(bytes(MP4FreeForm(values[0]))).decode() if values else None
-    return snap
-
-
-def _restore_tags(path: Path, snap: dict[str, str | None]) -> None:
-    import mutagen
-    from mutagen.id3 import GEOB, ID3, ID3NoHeaderError
-    from mutagen.mp4 import MP4FreeForm
-
-    suffix = path.suffix.lower()
-    if suffix == ".mp3":
-        try:
-            tags = ID3(path)
-        except ID3NoHeaderError:
-            tags = ID3()
-        for key, value in snap.items():
-            tags.delall(key)
-            if value is not None:
-                desc = key.split(":", 1)[1]
-                tags.add(GEOB(encoding=0, mime="application/octet-stream", filename="", desc=desc,
-                              data=base64.b64decode(value)))  # fmt: skip
-        tags.save(path, v2_version=4 if tags.version >= (2, 4, 0) else 3)
-        return
-    audio = mutagen.File(path)
-    if audio is None:
-        return
-    if audio.tags is None:
-        audio.add_tags()
-    for key, value in snap.items():
-        if key in audio.tags:
-            del audio.tags[key]
-        if value is None:
-            continue
-        raw = base64.b64decode(value)
-        if suffix in (".aif", ".aiff", ".wav"):
-            desc = key.split(":", 1)[1]
-            audio.tags.add(
-                GEOB(encoding=0, mime="application/octet-stream", filename="", desc=desc, data=raw)
-            )
-        elif suffix in (".m4a", ".mp4"):
-            audio.tags[key] = [MP4FreeForm(raw)]
-        else:
-            audio.tags[key] = raw.decode()
-    audio.save()
-
-
 # --- backup and restore -------------------------------------------------------------------
 
 
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with open(path, "rb") as f:
+        for block in iter(lambda: f.read(1 << 20), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def _copy_hashed(source: Path, target: Path) -> str:
+    """Copy a file and return its SHA-256, reading the source only once (sticks are slow)."""
+    digest = hashlib.sha256()
+    with open(source, "rb") as src, open(target, "wb") as dst:
+        for block in iter(lambda: src.read(1 << 20), b""):
+            digest.update(block)
+            dst.write(block)
+    shutil.copystat(source, target)
+    return digest.hexdigest()
+
+
+def _ignored(rel: str) -> bool:
+    return rel.startswith((".Trash", "System Volume Information"))
+
+
+def tree_hash(root: Path, checksums: dict[str, str]) -> str:
+    """One hash for the drive's whole file tree, like a Git tree: every folder and file name,
+    plus the content checksum of every file in ``checksums``. Files outside ``checksums``
+    count by name and size only, so a big drive isn't read in full."""
+    folders, files = [], {}
+    for dirpath, dirnames, filenames in os.walk(root):
+        here = Path(dirpath).relative_to(root)
+        for name in dirnames:
+            rel = str(here / name)
+            if not _ignored(rel):
+                folders.append(rel)
+        for name in filenames:
+            rel = str(here / name)
+            if not _ignored(rel):
+                files[rel] = checksums.get(rel) or f"size:{(root / rel).stat().st_size}"
+    listing = {"folders": sorted(folders), "files": dict(sorted(files.items()))}
+    return hashlib.sha256(json.dumps(listing).encode()).hexdigest()
+
+
 def backup_drive(
-    root: Path, backup_root: Path, full: bool, audio_to_snapshot: list[Path], progress: Progress
+    root: Path, backup_root: Path, full: bool, audio: list[Path], progress: Progress
 ) -> Path:
+    """Copy, byte for byte, everything a conversion could touch: the library folders and the
+    library's audio files on the drive (``full``: every file on the drive). Each file's
+    checksum is recorded, and checked once copied, so a restore can prove it's exact."""
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     dest = backup_root / f"{root.name or 'drive'}-{stamp}"
-    need = (
-        _drive_size(root)
-        if full
-        else sum(_drive_size(root / d) for d in LIBRARY_DIRS if (root / d).is_dir())
-    )
+    if full:
+        files = sorted(f for f in _files(root) if not _ignored(f))
+    else:
+        files = sorted(
+            {f for f in _files(root) if f.split("/", 1)[0] in LIBRARY_DIRS}
+            | {str(p.relative_to(root)) for p in audio}
+        )
+    need = sum((root / f).stat().st_size for f in files)
     backup_root.mkdir(parents=True, exist_ok=True)
     free = shutil.disk_usage(backup_root).free
     if need > free:
@@ -176,35 +153,24 @@ def backup_drive(
             f"the backup needs {need / 1e9:.1f} GB but {backup_root} has {free / 1e9:.1f} GB free"
         )
     dest.mkdir()
-    progress(
-        f"Backing up {'the whole drive' if full else 'the library folders'} ({need / 1e6:.0f} MB)"
-    )
-    if full:
-        shutil.copytree(
-            root,
-            dest / "files",
-            dirs_exist_ok=True,
-            ignore=shutil.ignore_patterns(".Trash*", "System Volume Information"),
-        )
-    else:
-        for name in LIBRARY_DIRS:
-            if (root / name).is_dir():
-                shutil.copytree(root / name, dest / "files" / name)
-    snapshots = {}
-    for n, path in enumerate(audio_to_snapshot, 1):
-        if n % 200 == 0:
-            progress(f"Saving Serato tags {n}/{len(audio_to_snapshot)}")
-        try:
-            snapshots[str(path.relative_to(root))] = _snapshot_tags(path)
-        except Exception:  # an unreadable file is left alone by the writer too
-            continue
+    progress(f"Backing up {len(files)} file(s) ({need / 1e6:.0f} MB)")
+    checksums = {}
+    for n, rel in enumerate(files, 1):
+        if n % 100 == 0:
+            progress(f"Backing up {n}/{len(files)}")
+        target = dest / "files" / rel
+        target.parent.mkdir(parents=True, exist_ok=True)
+        checksums[rel] = _copy_hashed(root / rel, target)
+        if _sha256(target) != checksums[rel]:  # re-read from the computer's disk: quick
+            raise OSError(f"the backup copy of {rel} doesn't match the original")
     manifest = {
         "drive": str(root),
         "label": root.name,
         "created": stamp,
         "full": full,
         "library_dirs": [d for d in LIBRARY_DIRS if (root / d).is_dir()],
-        "serato_tags": snapshots,
+        "files": checksums,
+        "tree": tree_hash(root, checksums),
     }
     (dest / "manifest.json").write_text(json.dumps(manifest, indent=1))
     return dest
@@ -226,25 +192,17 @@ def list_backups(backup_root: Path) -> list[dict[str, Any]]:
 
 
 def restore_drive(backup: Path, root: Path, progress: Progress = print) -> list[str]:
-    """Put a drive's library folders (or, for a full backup, every file) and Serato tags back."""
+    """Put back every file in the backup byte for byte, remove what the conversion added, and
+    check every restored file against its recorded checksum."""
     manifest = json.loads((backup / "manifest.json").read_text())
     done = []
     files = backup / "files"
-    for name in LIBRARY_DIRS:  # the conversion may have added library folders: remove them
-        if (root / name).is_dir() and not (files / name).is_dir():
+    checksums: dict[str, str] = manifest.get("files", {})
+    for name in LIBRARY_DIRS:  # library folders: exactly as backed up, or gone if they weren't
+        if (root / name).is_dir():
             shutil.rmtree(root / name)
-            done.append(f"removed {name}")
-    if manifest.get("full"):
-        progress("Restoring every file")
-        shutil.copytree(files, root, dirs_exist_ok=True)
-        done.append("restored all files")
-    else:
-        for name in manifest.get("library_dirs", []):
-            progress(f"Restoring {name}")
-            if (root / name).is_dir():
-                shutil.rmtree(root / name)
-            shutil.copytree(files / name, root / name)
-            done.append(f"restored {name}")
+            if not (files / name).is_dir():
+                done.append(f"removed {name}")
     removed = 0
     for rel in manifest.get("created_files", []):
         path = root / rel
@@ -258,17 +216,21 @@ def restore_drive(backup: Path, root: Path, progress: Progress = print) -> list[
                     parent.rmdir()
     if removed:
         done.append(f"removed {removed} file(s) the conversion had added")
-    restored = 0
-    for rel, snap in manifest.get("serato_tags", {}).items():
-        path = root / rel
-        if path.is_file():
-            try:
-                _restore_tags(path, snap)
-                restored += 1
-            except Exception:
-                continue
-    if restored:
-        done.append(f"restored Serato tags in {restored} file(s)")
+    progress(f"Restoring {len(checksums)} file(s)")
+    for rel in checksums:
+        (root / rel).parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(files / rel, root / rel)
+    wrong = [rel for rel, digest in checksums.items() if _sha256(root / rel) != digest]
+    if wrong:
+        raise OSError(
+            f"{len(wrong)} restored file(s) don't match the backup: {', '.join(wrong[:5])}"
+        )
+    if "tree" in manifest and tree_hash(root, checksums) != manifest["tree"]:
+        raise OSError(
+            "the restored files match, but the drive's file tree doesn't: a file or folder "
+            "was added or removed since the backup"
+        )
+    done.append(f"restored {len(checksums)} file(s); the drive's file tree matches the backup")
     return done
 
 
@@ -310,15 +272,17 @@ def convert_drive(
     progress("Reading the drive's library")
     library = read_library(read, progress)
 
-    # 1. Back up to the computer. Files whose Serato tags will be rewritten are snapshotted.
-    snapshot: list[Path] = []
-    if target == Format.SERATO:
-        for track in library.tracks.values():
-            local = Path(track.extra.get("local", track.location))
-            if local.is_file() and root in local.resolve().parents and (track.cues or track.grid):
-                snapshot.append(local)
+    # 1. Back up to the computer: the library folder and all its audio, byte for byte.
+    audio = sorted(
+        {
+            local.resolve()
+            for track in library.tracks.values()
+            if (local := Path(track.extra.get("local", track.location))).is_file()
+            and root in local.resolve().parents
+        }
+    )
     backup_root = Path(options.backup_dir or root.parent / "cratemover-backups")
-    backup = backup_drive(root, backup_root, options.full_backup, snapshot, progress)
+    backup = backup_drive(root, backup_root, options.full_backup, audio, progress)
     result = DriveConvertResult(backup=str(backup), source_format=source_format)
     before = _files(root)
 
@@ -354,7 +318,9 @@ def convert_drive(
 
     # 3. Verify, and 4. check nothing else is on the drive.
     progress("Checking the drive")
-    problems = verify_conversion(root, library, target, mp3_decoder=options.mp3_decoder)
+    problems, result.fingerprint = verify_conversion(
+        root, library, source_format, target, mp3_decoder=options.mp3_decoder
+    )
     problems += check_drive(root, before, source_format, target, library)
     if problems:
         progress("The check failed: restoring the drive from the backup")
@@ -363,6 +329,13 @@ def convert_drive(
             "The converted drive didn't pass its checks, so it was put back as it was:\n- "
             + "\n- ".join(problems)
         )
+    manifest = json.loads(manifest_path.read_text())
+    manifest["converted_to"] = {
+        "format": target,
+        "fingerprint": result.fingerprint,
+        "fingerprint_schema": result.fingerprint_schema,
+    }
+    manifest_path.write_text(json.dumps(manifest, indent=1))
     return result
 
 
@@ -370,72 +343,26 @@ def _library_dirs(fmt: Format) -> tuple[str, ...]:
     return ("PIONEER", ".PIONEER") if fmt == Format.REKORDBOX_USB else ("_Serato_",)
 
 
-def _key(track: Track, root: Path) -> str:
-    """A track's audio file on the drive, without its extension (a transcode keeps its name)."""
-    location = Path(track.extra.get("local") or track.location)
-    if not location.is_absolute() or root not in location.parents:
-        location = root / str(track.location).lstrip("/\\")
-    with contextlib.suppress(ValueError):
-        location = location.relative_to(root)
-    return str(location.with_suffix("")).lower()
-
-
-# Cue positions are whole milliseconds in every format, so a converted cue may move by rounding
-# and nothing more, unless the audio itself was converted (see TRANSCODE_OFFSET_MS).
-_CUE_TOLERANCE_MS = 1.0
-
-
 def verify_conversion(
-    root: Path, source: Library, target: Format, mp3_decoder: Mp3Decoder = Mp3Decoder.MAD
-) -> list[str]:
-    """Read the new library back and compare it with the one it was made from."""
+    root: Path,
+    source: Library,
+    source_format: Format,
+    target: Format,
+    mp3_decoder: Mp3Decoder = Mp3Decoder.MAD,
+) -> tuple[list[str], str]:
+    """Read the new library back and check it against the source, exactly (see
+    :mod:`cratemover.fingerprint`). Returns the differences and the new library's fingerprint."""
     read = ReadOptions(
         format=target, path=str(root), serato_root=str(root), mp3_decoder=mp3_decoder
     )
     try:
         new = read_library(read)
     except Exception as exc:
-        return [f"the new {target} library can't be read back: {exc}"]
-    expected = {
-        _key(t, root): t for t in source.tracks.values() if Path(t.extra.get("local", "")).is_file()
-    }
-    got = {_key(t, root): t for t in new.tracks.values()}
-    problems = [f"track missing: {key}" for key in sorted(expected.keys() - got.keys())]
-    max_slots = 8 if target == Format.REKORDBOX_USB else 16
-    for key in sorted(expected.keys() & got.keys()):
-        old, now = expected[key], got[key]
-        # Audio converted to MP3 starts later by the encoder's delay; the writer moves cues to match.
-        shift = TRANSCODE_OFFSET_MS if now.extension != old.extension else 0.0
-        cues = {c.slot: c.position_ms - shift for c in now.hot_cues}
-        for cue in old.hot_cues:
-            if cue.slot is None or cue.slot >= max_slots:
-                continue
-            if cue.slot not in cues:
-                problems.append(f"{key}: hot cue {cue.slot + 1} missing")
-            elif abs(cues[cue.slot] - cue.position_ms) > _CUE_TOLERANCE_MS:
-                problems.append(
-                    f"{key}: hot cue {cue.slot + 1} moved from {cue.position_ms:.1f} ms "
-                    f"to {cues[cue.slot] + shift:.1f} ms"
-                    + (f" (expected +{shift:.0f} ms for the MP3 conversion)" if shift else "")
-                )
-        if old.grid and not now.grid:
-            problems.append(f"{key}: beat grid missing")
-
-    def lists(lib: Library, tracks: dict[str, Track]) -> dict[str, list[set[str]]]:
-        by_id = {t.id: k for k, t in tracks.items()}
-        out: dict[str, list[set[str]]] = {}
-        for _, playlist in lib.playlists.walk():
-            if playlist.track_ids is not None:
-                members = {by_id[i] for i in playlist.track_ids if i in by_id}
-                out.setdefault(playlist.name, []).append(members)
-        return out
-
-    old_lists, new_lists = lists(source, expected), lists(new, got)
-    for name, versions in sorted(old_lists.items()):
-        for members in versions:
-            if members not in new_lists.get(name, []):
-                problems.append(f"playlist {name!r} missing or has different tracks")
-    return problems
+        return [f"the new {target} library can't be read back: {exc}"], ""
+    r = fingerprint.rules(source_format, target)
+    return fingerprint.check(source, new, root, r), fingerprint.fingerprint(
+        fingerprint.canonical(new, root, r)
+    )
 
 
 def check_drive(
@@ -453,7 +380,7 @@ def check_drive(
     for f in sorted(after & before):
         if f.split("/", 1)[0] in old_dirs:
             problems.append(f"old library file still there: {f}")
-    audio = {_key(t, root) for t in library.tracks.values()}
+    audio = {fingerprint.track_key(t, root) for t in library.tracks.values()}
     for f in sorted(after - before):
         if f.split("/", 1)[0] in new_dirs:
             continue

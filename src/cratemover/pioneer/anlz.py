@@ -15,6 +15,7 @@ import math
 import struct
 from dataclasses import dataclass, field
 
+from ..grid import fit_sections
 from ..model import Cue, CueRole, TempoMarker
 
 HEADER_TAIL = bytes([0, 0, 0, 1, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0])
@@ -100,21 +101,12 @@ def read_grid(f: AnlzFile) -> list[TempoMarker]:
     if s is None:
         return []
     (count,) = struct.unpack_from(">I", s.data, 20)
-    grid: list[TempoMarker] = []
-    since = 0
+    beats = []
     for i in range(count):
         beat, tempo, time = struct.unpack_from(">HHI", s.data, 24 + 8 * i)
-        bpm = tempo / 100.0
-        if bpm <= 0:
-            continue
-        if grid:
-            since += 1
-            expected = grid[-1].position_ms + since * 60000.0 / grid[-1].bpm
-            if abs(grid[-1].bpm - bpm) < 0.001 and abs(time - expected) <= 2.0:
-                continue
-        grid.append(TempoMarker(float(time), bpm, beat or 1))
-        since = 0
-    return grid
+        if tempo > 0:
+            beats.append((float(time), beat or 1, tempo / 100.0))
+    return fit_sections(beats)
 
 
 def _pcob_cues(s: Section) -> list[Cue]:
