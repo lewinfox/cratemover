@@ -2,9 +2,17 @@
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
 REMOVABLE = ("/media/", "/mnt/", "/Volumes/", "/run/media/")
+
+
+def serato_root(drive: Path) -> str:
+    """What a Serato library in ``drive`` stores its paths relative to: the drive it's on."""
+    if sys.platform == "win32":
+        return drive.anchor  # C:\ or E:\
+    return str(drive) if str(drive).startswith(REMOVABLE) else "/"
 
 
 def _is_file(path: Path) -> bool:
@@ -25,8 +33,7 @@ def is_rekordbox_xml(path: Path) -> bool:
 def _serato(folder: Path) -> dict[str, str]:
     # A _Serato_ at a drive's root stores paths relative to that drive.
     drive = folder.parent if folder.name == "_Serato_" else folder
-    root = str(drive) if str(drive).startswith(REMOVABLE) else "/"
-    return {"format": "serato", "path": str(folder), "serato_root": root}
+    return {"format": "serato", "path": str(folder), "serato_root": serato_root(drive)}
 
 
 def _stick(root: Path) -> dict[str, str]:

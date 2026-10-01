@@ -234,7 +234,7 @@ def _transcode(local: Path, track: Track, root: Path) -> tuple[str, bool]:
     dest.parent.mkdir(parents=True, exist_ok=True)
     partial = dest.with_name(dest.stem + ".part.mp3")
     subprocess.run(
-        ["ffmpeg", "-nostdin", "-v", "error", "-y", "-i", str(local), "-map", "0:a:0",
+        [waveform.ffmpeg() or "ffmpeg", "-nostdin", "-v", "error", "-y", "-i", str(local), "-map", "0:a:0",
          "-c:a", "libmp3lame", "-b:a", "320k", "-map_metadata", "0", str(partial)],
         check=True,
         capture_output=True,

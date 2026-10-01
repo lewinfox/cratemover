@@ -139,11 +139,20 @@ def main(argv: list[str] | None = None) -> int:
     serve = sub.add_parser("serve", help="run the web UI")
     serve.add_argument("--host", default="127.0.0.1")
     serve.add_argument("--port", type=int, default=8000)
+    serve.add_argument("--no-browser", action="store_true", help="don't open the web UI")
 
     args = parser.parse_args(argv)
     if args.command == "serve":
+        import threading
+        import webbrowser
+
         import uvicorn
 
+        if not args.no_browser:
+            url = (
+                f"http://{'127.0.0.1' if args.host in ('0.0.0.0', '::') else args.host}:{args.port}"
+            )
+            threading.Timer(1.5, webbrowser.open, [url]).start()
         uvicorn.run("cratemover.web.server:app", host=args.host, port=args.port)
         return 0
 

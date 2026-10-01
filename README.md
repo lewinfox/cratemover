@@ -2,7 +2,29 @@
 
 Read, write, convert and sync DJ libraries between **Mixxx**, **Rekordbox** (USB sticks, XML and
 Rekordbox 6/7's own library) and **Serato** (on the computer or a USB stick): tracks, playlists,
-crates, hot cues, memory cues, loops and beat grids. It has a web UI (Docker) and a command line.
+crates, hot cues, memory cues, loops and beat grids. It has a web UI and a command line.
+
+## Quick start
+
+1. Install [uv](https://docs.astral.sh/uv/getting-started/installation/).
+2. Run it. The web UI opens in your browser:
+
+   ```sh
+   uvx --from git+https://github.com/lewinfox/cratemover cratemover serve
+   ```
+
+3. Quit your DJ software before converting or syncing.
+
+It finds your libraries in their usual places, and any USB stick you plug in:
+
+|               | macOS                                         | Windows                       |
+|---------------|-----------------------------------------------|-------------------------------|
+| Rekordbox 6/7 | `~/Library/Pioneer/rekordbox`                 | `%APPDATA%\Pioneer\rekordbox` |
+| Serato        | `~/Music/_Serato_`                            | `%USERPROFILE%\Music\_Serato_` |
+| Mixxx         | `~/Library/Containers/org.mixxx.mixxx/…/Mixxx` | `%LOCALAPPDATA%\Mixxx`        |
+
+New libraries are written to an `export` folder in the folder you ran the command from. Linux,
+or a server: see [Docker](#docker-web-ui).
 
 | From \ To                          | Mixxx | Rekordbox USB | Rekordbox XML | Serato |
 |------------------------------------|:-----:|:-------------:|:-------------:|:------:|
@@ -218,7 +240,7 @@ is why it wants the whole Rekordbox folder. Intelligent playlists are skipped.
 ## Develop
 
 ```sh
-uv sync --all-extras             # web and rekordbox extras plus dev tools
+uv sync                         # the app plus dev tools
 uv run pytest                    # generates test audio with ffmpeg; those tests skip without it
 uv run ruff check && uv run ruff format --check
 uv run python tests/fakelib.py /tmp/demo   # a demo Mixxx library + music to point the app at

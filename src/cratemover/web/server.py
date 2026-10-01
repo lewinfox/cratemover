@@ -3,8 +3,10 @@
 Environment:
 
 * ``EXPORT_DIR`` (default ``./export``): conversions are written under here.
-* ``BROWSE_ROOTS`` (default ``/sources:<EXPORT_DIR>:/media:/mnt:/Volumes:$HOME``): folders
-  the file picker may show and libraries may be written in, separated by ``:``.
+* ``BROWSE_ROOTS`` (default ``/sources:<EXPORT_DIR>:/media:/mnt:/Volumes:$HOME`` plus the
+  DJ programs' own folders on macOS and Windows): folders the file picker may show and
+  libraries may be written in, separated by ``:`` (``;`` on Windows). Drives that are
+  plugged in are always included.
 * ``UPLOAD_DIR`` (default a temp dir): where uploaded libraries are unpacked.
 * ``BACKUP_DIR`` (default ``<EXPORT_DIR>/backups``): where drive conversions back drives up.
 * ``USB_ROOTS`` (default ``/media:/run/media:/mnt:/Volumes``): where removable drives
@@ -15,6 +17,7 @@ from __future__ import annotations
 
 import io
 import os
+import sys
 import tempfile
 import threading
 import traceback
@@ -43,7 +46,7 @@ from ..convert import (
     sync_libraries,
     write_library,
 )
-from ..detect import REMOVABLE, detect_libraries, is_rekordbox_xml
+from ..detect import detect_libraries, is_rekordbox_xml, serato_root
 from ..devices import list_drives, usb_roots
 from ..drive_convert import DriveConvertOptions, convert_drive, list_backups, restore_drive
 from ..keys import KeyNotation, format_key
@@ -53,17 +56,44 @@ from ..sync import CuePolicy, PlaylistPolicy, Prefer, SyncOptions
 
 EXPORT_DIR = Path(os.environ.get("EXPORT_DIR", "export")).resolve()
 UPLOAD_DIR = Path(os.environ.get("UPLOAD_DIR") or tempfile.mkdtemp(prefix="cratemover-uploads-"))
+
+
+def _default_browse_roots() -> list[Path]:
+    home = Path.home()
+    if sys.platform == "win32":
+        appdata = Path(os.environ.get("APPDATA", home / "AppData" / "Roaming"))
+        local = Path(os.environ.get("LOCALAPPDATA", home / "AppData" / "Local"))
+        return [EXPORT_DIR, home, appdata / "Pioneer" / "rekordbox", local / "Mixxx"]
+    roots = [Path(p) for p in ("/sources", EXPORT_DIR, "/media", "/mnt", "/Volumes", "/run/media")]
+    roots.append(home)
+    if sys.platform == "darwin":
+        library = home / "Library"
+        roots += [
+            library / "Pioneer" / "rekordbox",
+            library / "Containers/org.mixxx.mixxx/Data/Library/Application Support/Mixxx",
+            library / "Application Support" / "Mixxx",
+        ]
+    return roots
+
+
 BROWSE_ROOTS = [
     *usb_roots(),
     *(
-        Path(p)
-        for p in os.environ.get(
-            "BROWSE_ROOTS", f"/sources:{EXPORT_DIR}:/media:/mnt:/Volumes:/run/media:{Path.home()}"
-        ).split(":")
-        if p
+        [Path(p) for p in os.environ["BROWSE_ROOTS"].split(os.pathsep) if p]
+        if os.environ.get("BROWSE_ROOTS")
+        else _default_browse_roots()
     ),
 ]
 BROWSE_ROOTS = list(dict.fromkeys(BROWSE_ROOTS))
+
+
+def _browse_roots() -> list[Path]:
+    """The configured folders plus any drive plugged in now (Windows drive letters aren't
+    under a common folder, so they can't be configured up front)."""
+    roots = list(BROWSE_ROOTS)
+    roots += [p for p in (Path(d.path) for d in list_drives()) if p not in roots]
+    return roots
+
 
 BACKUP_DIR = Path(os.environ.get("BACKUP_DIR") or EXPORT_DIR / "backups").resolve()
 
@@ -131,13 +161,9 @@ def info() -> dict[str, Any]:
         "sync_formats": SYNC_FORMATS,
         "key_notations": [k.value for k in KeyNotation],
         "export_dir": str(EXPORT_DIR),
-        "browse_roots": [str(p) for p in BROWSE_ROOTS if p.exists()],
+        "browse_roots": [str(p) for p in _browse_roots() if p.exists()],
         "suggestions": _suggest_sources(),
     }
-
-
-def _is_removable(path: Path) -> bool:
-    return str(path).startswith(REMOVABLE)
 
 
 def _suggest_sources() -> list[dict[str, str]]:
@@ -160,7 +186,7 @@ def _suggest_sources() -> list[dict[str, str]]:
         ("master.db", "rekordbox_db"),
         ("*/master.db", "rekordbox_db"),
     )
-    for root in BROWSE_ROOTS:
+    for root in _browse_roots():
         if not root.is_dir():
             continue
         for pattern, fmt in patterns:
@@ -174,7 +200,7 @@ def _suggest_sources() -> list[dict[str, str]]:
                         entry["path"] = str(folder)
                         # A _Serato_ at a drive's root stores paths relative to that drive.
                         drive = folder.parent if folder.name == "_Serato_" else folder
-                        entry["serato_root"] = str(drive) if _is_removable(drive) else "/"
+                        entry["serato_root"] = serato_root(drive)
                     elif fmt == "rekordbox_xml" and not is_rekordbox_xml(match):
                         continue
                     if entry not in found:
@@ -265,7 +291,7 @@ def restore(request: RestoreRequest) -> dict[str, str]:
 def _allowed(path: Path) -> bool:
     resolved = path.resolve()
     return any(
-        resolved == r.resolve() or r.resolve() in resolved.parents for r in BROWSE_ROOTS
+        resolved == r.resolve() or r.resolve() in resolved.parents for r in _browse_roots()
     ) or (UPLOAD_DIR.resolve() in resolved.parents)
 
 
@@ -276,7 +302,7 @@ def browse(path: str = "") -> dict[str, Any]:
             "path": "",
             "parent": None,
             "entries": [
-                {"name": str(r), "path": str(r), "dir": True} for r in BROWSE_ROOTS if r.exists()
+                {"name": str(r), "path": str(r), "dir": True} for r in _browse_roots() if r.exists()
             ],
         }
     target = Path(path)
@@ -292,7 +318,7 @@ def browse(path: str = "") -> dict[str, Any]:
         raise HTTPException(403, "permission denied") from exc
     parent = (
         str(target.parent)
-        if any(r.resolve() in target.resolve().parents for r in BROWSE_ROOTS)
+        if any(r.resolve() in target.resolve().parents for r in _browse_roots())
         else ""
     )
     return {"path": str(target), "parent": parent, "entries": entries[:2000]}

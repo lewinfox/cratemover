@@ -8,18 +8,20 @@ license = "GPL-3.0-only"
 license-files = ["LICENSE"]
 dependencies = [
   "mutagen>=1.47",
-]
-
-[project.optional-dependencies]
-web = [
+  # The web UI.
   "fastapi>=0.115",
   "uvicorn>=0.30",
   "python-multipart>=0.0.9",
-]
-# Reading Rekordbox 6/7's encrypted master.db and OneLibrary (exportLibrary.db).
-rekordbox = [
+  # Reading Rekordbox 6/7's encrypted master.db and OneLibrary (exportLibrary.db).
   "sqlcipher3-wheels>=0.5",
+  # An ffmpeg binary for waveforms and MP3 conversion (the Docker image builds a small one).
+  "imageio-ffmpeg>=0.5",
+  # Finding USB drives on macOS and Windows.
+  "psutil>=5.9; sys_platform == 'darwin' or sys_platform == 'win32'",
 ]
+
+[project.urls]
+Homepage = "https://github.com/lewinfox/cratemover"
 
 [project.scripts]
 cratemover = "cratemover.cli:main"
@@ -33,7 +35,7 @@ dev = [
 ]
 
 [build-system]
-requires = ["uv_build>=0.8.17,<0.10"]
+requires = ["uv_build>=0.8.17,<0.13"]
 build-backend = "uv_build"
 
 [tool.uv]
