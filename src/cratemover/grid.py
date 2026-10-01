@@ -74,40 +74,74 @@ def sections_from_beats(
     return sections
 
 
-def fit_sections(
-    beats: list[tuple[float, int, float]], tolerance_ms: float = 1.0
-) -> list[TempoMarker]:
-    """Tempo sections that put every beat within ``tolerance_ms`` of where it was.
+# Rekordbox stores beat times in whole milliseconds, so even a perfect grid scatters about a
+# straight line by up to 0.5 ms (RMS about 0.29 ms). A section is one straight line while its
+# beats stay this close to it: RMS for the bulk, and a cap on any single beat.
+FIT_RMS_MS = 0.5
+FIT_MAX_MS = 2.0
+
+
+def _line(xs: list[float], ys: list[float]) -> tuple[float, float]:
+    """Least-squares intercept and slope of ys over xs."""
+    n = len(xs)
+    mx, my = sum(xs) / n, sum(ys) / n
+    sxx = sum((x - mx) ** 2 for x in xs)
+    slope = sum((x - mx) * (y - my) for x, y in zip(xs, ys, strict=True)) / sxx if sxx else 0.0
+    return my - slope * mx, slope
+
+
+def _fits(xs: list[float], ys: list[float], intercept: float, slope: float) -> bool:
+    errors = [y - (intercept + slope * x) for x, y in zip(xs, ys, strict=True)]
+    rms = (sum(e * e for e in errors) / len(errors)) ** 0.5
+    return rms <= FIT_RMS_MS and max(abs(e) for e in errors) <= FIT_MAX_MS
+
+
+def fit_sections(beats: list[tuple[float, int, float]]) -> list[TempoMarker]:
+    """Tempo sections that best fit a per-beat grid.
 
     ``beats`` are (position in ms, beat-in-bar, labelled BPM), one per beat, as Rekordbox
     stores them: positions in whole milliseconds, BPM labels rounded to 0.01. The label isn't
     precise enough to rebuild the grid (a beat labelled 128.00 can really be 127.995 and drift
-    a few ms over a minute), so each section's tempo comes from the beat positions: the
-    section runs as long as one straight line through its beats fits them all, and a new one
-    starts where the label changes or the beats leave the line.
+    a few ms over a minute), so each section is the least-squares line through its beats. A
+    section grows while the line fits (``FIT_RMS_MS``, ``FIT_MAX_MS``); a new one starts where
+    the label changes or the beats leave the line. When the labelled BPM fits as well, it's
+    used, so a grid rekordbox wrote at exactly 128.00 stays 128.00.
     """
     markers: list[TempoMarker] = []
     i = 0
     while i < len(beats):
-        start, beat_in_bar, label = beats[i]
-        lo, hi = 0.0, float("inf")  # beat lengths (ms) that keep every beat so far on the line
+        label = beats[i][2]
         j = i
-        while j + 1 < len(beats) and beats[j + 1][2] == label:
-            n = j + 1 - i
-            offset = beats[j + 1][0] - start
-            new_lo, new_hi = (
-                max(lo, (offset - tolerance_ms) / n),
-                min(hi, (offset + tolerance_ms) / n),
-            )
-            if new_lo > new_hi:
+        # Grow in doubling steps, then narrow down to the longest stretch that still fits.
+        good, step = i, 1
+        while True:
+            k = min(j + step, len(beats) - 1)
+            while k > good and beats[k][2] != label:
+                k -= 1
+            if k <= good:
                 break
-            lo, hi, j = new_lo, new_hi, j + 1
-        # The label when it fits every beat (it usually does), else the middle of what fits.
-        beat_ms = 60000.0 / label
-        if j > i and not lo <= beat_ms <= hi:
-            beat_ms = (lo + hi) / 2
-        markers.append(TempoMarker(start, 60000.0 / beat_ms, beat_in_bar))
-        i = j + 1
+            xs = [float(n - i) for n in range(i, k + 1)]
+            ys = [beats[n][0] for n in range(i, k + 1)]
+            if _fits(xs, ys, *_line(xs, ys)):
+                good, j, step = k, k, step * 2
+                if k == len(beats) - 1:
+                    break
+            elif step == 1:
+                break
+            else:
+                step = max(1, step // 2)
+        xs = [float(n - i) for n in range(i, good + 1)]
+        ys = [beats[n][0] for n in range(i, good + 1)]
+        intercept, beat_ms = _line(xs, ys) if good > i else (ys[0], 60000.0 / label)
+        labelled = 60000.0 / label
+        label_start = sum(y - x * labelled for x, y in zip(xs, ys, strict=True)) / len(xs)
+        if good > i and _fits(xs, ys, label_start, labelled):
+            intercept, beat_ms = label_start, labelled
+        # Sit the marker on the stored first beat when that's only rounding away from the line
+        # (it always should be), so the grid starts exactly where rekordbox put it.
+        start = ys[0] if abs(ys[0] - intercept) <= 0.5 else intercept
+        markers.append(TempoMarker(start, 60000.0 / beat_ms, beats[i][1]))
+        i = good + 1
     return markers
 
 

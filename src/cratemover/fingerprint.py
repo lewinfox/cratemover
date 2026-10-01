@@ -133,7 +133,12 @@ def _sorted(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 def _track(track: Track, r: Rules, cues: list[dict[str, Any]], shift: float) -> dict[str, Any]:
-    out: dict[str, Any] = {name: _value(getattr(track, name)) for name in r.track_fields}
+    # Text is compared without surrounding spaces: formats differ in keeping them (a title
+    # " LINGER" came back from Serato as "LINGER"), and they don't change what plays.
+    out: dict[str, Any] = {
+        name: v.strip() if isinstance(v := _value(getattr(track, name)), str) else v
+        for name in r.track_fields
+    }
     out["cues"] = _sorted(cues)
     out["grid"] = _grid(track.grid, r, shift)
     return out
@@ -198,8 +203,36 @@ def expected(source: Library, root: Path, r: Rules, converted: set[str]) -> dict
     for track in _on_drive(source, root):
         key = track_key(track, root)
         shift = r.transcode_shift_ms if key in converted else 0.0
+        if r.target == Format.SERATO:
+            track = replace(track, grid=serato_grid(track.grid))
         tracks[key] = _track(track, r, _expected_cues(track, r, shift), shift)
     return _form(source, root, tracks)
+
+
+def serato_grid(markers: list[TempoMarker]) -> list[TempoMarker]:
+    """A grid as Serato can hold it. Serato stores each marker but the last as "N beats to the
+    next marker" and spaces those beats evenly, so a section whose beats aren't quite even
+    (rekordbox's are whole milliseconds, and sometimes uneven) gets evenly spaced beats."""
+    out = sorted(markers, key=lambda m: m.position_ms)
+    for i in range(len(out) - 1):
+        span = out[i + 1].position_ms - out[i].position_ms
+        beats = max(1, round(span * out[i].bpm / 60000.0))
+        out[i] = TempoMarker(out[i].position_ms, beats * 60000.0 / span, out[i].beat)
+    return out
+
+
+def grid_slip_ms(markers: list[TempoMarker]) -> float:
+    """How far (ms) :func:`serato_grid` moves the furthest beat of this grid."""
+    from . import grid as gridlib
+
+    if len(markers) < 2:
+        return 0.0
+    end = max(m.position_ms for m in markers)
+    before = gridlib.beat_positions(markers, end)
+    after = gridlib.beat_positions(serato_grid(markers), end)
+    if len(before) != len(after):
+        return float("inf")
+    return max(abs(a[0] - b[0]) for a, b in zip(before, after, strict=True))
 
 
 def _expected_cues(track: Track, r: Rules, shift: float) -> list[dict[str, Any]]:
@@ -272,8 +305,19 @@ def fingerprint(form: dict[str, Any]) -> str:
     return hashlib.sha256(json.dumps(form, sort_keys=True).encode()).hexdigest()
 
 
+_WHAT = {"grid": "beat grid", "cues": "cues", "tracks": "tracks"}
+
+
 def differences(want: Any, got: Any, path: str = "") -> list[str]:
-    """Where two canonical forms differ, as readable lines."""
+    """Where two canonical forms differ, as short readable lines."""
+    if path.startswith("tracks/") and path.count("/") == 2 and want != got:
+        track, field = path.split("/")[1:]
+        name = track.rsplit("/", 1)[-1]
+        if field in ("grid", "cues"):
+            return [f"{name}: {_WHAT[field]} didn't match after conversion"]
+        return [f"{name}: {field} didn't match ({json.dumps(want)} became {json.dumps(got)})"]
+    if path == "playlists" and want != got:
+        return ["playlists didn't match after conversion"]
     if isinstance(want, dict) and isinstance(got, dict):
         out = []
         for k in sorted(want.keys() | got.keys(), key=str):

@@ -529,8 +529,14 @@ def _write_file_tags(
     missing: list[str] = []
     dropped = 0
     total = len(library.tracks)
+    progress(f"Writing Serato tags into {total} audio file(s)")
+    steps, tick = getattr(progress, "steps", None), getattr(progress, "tick", None)
+    if steps is not None:
+        steps(total)
     for n, track in enumerate(library.tracks.values(), 1):
-        if n % 50 == 0:
+        if tick is not None:
+            tick()
+        elif n % 50 == 0:
             progress(f"Writing Serato tags {n}/{total}")
         if not track.cues and not track.grid:
             continue

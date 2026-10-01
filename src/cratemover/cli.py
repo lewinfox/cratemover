@@ -247,7 +247,7 @@ def _converted(drive: str, source: Format | None, target: Format, result: Any) -
     facts.add_column(style="dim", no_wrap=True)
     facts.add_column(overflow="fold")
     names = f"{FORMAT_NAMES.get(source, source or '?')} → {FORMAT_NAMES[target]}"
-    facts.add_row("Library", names + f"  (removed {', '.join(result.removed) or 'nothing'})")
+    facts.add_row("Library", names)
     facts.add_row(
         "Tracks",
         f"{summary.get('tracks', 0)} in {summary.get('playlists', 0)} playlist(s), "
@@ -280,10 +280,19 @@ def _converted(drive: str, source: Format | None, target: Format, result: Any) -
     )
 
 
-def _failed(title: str, details: str) -> None:
-    lines = [line for line in details.splitlines() if line.strip()]
-    body = Group(*(Text(line, style="red" if line.startswith("- ") else "") for line in lines))
-    Console().print(Panel(body, title=f"✘ {title}", title_align="left", border_style="red"))
+def _failed(title: str, reason: str, problems: list[str], restored: bool = False) -> None:
+    parts: list[Any] = [Text(reason)]
+    parts += [Text(f"  • {p}", style="red") for p in problems[:20]]
+    if len(problems) > 20:
+        parts.append(Text(f"  … and {len(problems) - 20} more", style="red"))
+    if restored:
+        parts.append(
+            Text("✔ Backup restored safely: the stick is exactly as it was (every file checked)",
+                 style="bold green")
+        )  # fmt: skip
+    Console().print(
+        Panel(Group(*parts), title=f"✘ {title}", title_align="left", border_style="red")
+    )
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -428,7 +437,7 @@ def main(argv: list[str] | None = None) -> int:
     progress = _Log()
 
     if args.command == "convert-usb":
-        from .drive_convert import DriveConvertOptions, convert_drive
+        from .drive_convert import DriveConvertOptions, RolledBack, convert_drive
 
         args.target_format = USB_TARGETS[args.target_name]
         source = next(iter(_drive_formats(Path(args.drive))), None)
@@ -445,12 +454,15 @@ def main(argv: list[str] | None = None) -> int:
                 ),
                 progress,
             )
-        except (ValueError, OSError) as exc:
+        except RolledBack as exc:
             progress.done()
             _failed(
-                f"Not converted: {args.drive} was left (or put back) as it was",
-                str(exc),
+                f"Not converted: {Path(args.drive).name}", exc.reason, exc.problems, restored=True
             )
+            return 1
+        except (ValueError, OSError) as exc:
+            progress.done()
+            _failed(f"Not converted: {Path(args.drive).name}", str(exc), [])
             return 1
         progress.done()
         _converted(args.drive, source, args.target_format, result)
@@ -462,7 +474,7 @@ def main(argv: list[str] | None = None) -> int:
         try:
             done = restore_drive(Path(args.backup), Path(args.drive), progress)
         except OSError as exc:
-            _failed(f"Restore failed: {args.drive} doesn't match the backup", str(exc))
+            _failed(f"Restore failed: {args.drive} doesn't match the backup", str(exc), [])
             return 1
         body = Text("\n".join(done))
         Console().print(
