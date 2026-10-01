@@ -7,9 +7,9 @@
 # place (every file changed is backed up first), and Serato keeps cues in the music files.
 # Except Rekordbox's own folder: the app only ever reads it.
 services:
-  dj-library-converter:
+  cratemover:
     build: .
-    image: dj-library-converter
+    image: cratemover
     ports:
       - "127.0.0.1:${PORT:-8000}:8000"
     # Write files as you, not root: `export UID GID=$(id -g)` if yours aren't 1000.

@@ -9,7 +9,7 @@ from conftest import FIXTURES
 
 pytest.importorskip("sqlcipher3")
 
-from djconvert.rekordbox_db import grid_from_anlz, read_rekordbox_db
+from cratemover.rekordbox_db import grid_from_anlz, read_rekordbox_db
 
 ANLZ = FIXTURES / "rekordbox/anlz/demo-track-1.DAT"
 

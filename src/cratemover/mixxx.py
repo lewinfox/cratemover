@@ -7,7 +7,7 @@ one and merges into the copy.
 
 Positions: Mixxx stores cues in samples of its stereo engine output (frames *
 2) and beats in frames, both on its own decoding timeline, which differs from
-the reference timeline by :func:`djconvert.offsets.mixxx_offset_ms`.
+the reference timeline by :func:`cratemover.offsets.mixxx_offset_ms`.
 """
 
 from __future__ import annotations
@@ -340,7 +340,7 @@ class MixxxWriteResult:
 
 def create_database(path: Path) -> sqlite3.Connection:
     """A new, empty Mixxx database at the current schema version."""
-    schema = resources.files("djconvert").joinpath("mixxx_schema.xml").read_text(encoding="utf-8")
+    schema = resources.files("cratemover").joinpath("mixxx_schema.xml").read_text(encoding="utf-8")
     root = ET.fromstring(schema)
     db = sqlite3.connect(path)
     latest, min_compatible = 0, 0

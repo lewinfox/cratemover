@@ -302,7 +302,7 @@ def convert_drive(
             local = Path(track.extra.get("local", track.location))
             if local.is_file() and root in local.resolve().parents and (track.cues or track.grid):
                 snapshot.append(local)
-    backup_root = Path(options.backup_dir or root.parent / "djconvert-backups")
+    backup_root = Path(options.backup_dir or root.parent / "cratemover-backups")
     backup = backup_drive(root, backup_root, options.full_backup, snapshot, progress)
     result = DriveConvertResult(backup=str(backup), source_format=source_format)
     before = _files(root)
@@ -329,7 +329,7 @@ def convert_drive(
     created = sorted(
         f
         for f in _files(root) - before
-        if f.split("/", 1)[0] not in LIBRARY_DIRS and ".djconvert-" not in f
+        if f.split("/", 1)[0] not in LIBRARY_DIRS and ".cratemover-" not in f
     )
     manifest_path = backup / "manifest.json"
     manifest = json.loads(manifest_path.read_text())

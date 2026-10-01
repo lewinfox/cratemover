@@ -18,7 +18,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from djconvert.mixxx import create_database, encode_beatgrid, encode_beatmap
+from cratemover.mixxx import create_database, encode_beatgrid, encode_beatmap
 
 RATE = 44100
 

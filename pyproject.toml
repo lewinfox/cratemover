@@ -1,5 +1,5 @@
 [project]
-name = "dj-library-converter"
+name = "cratemover"
 version = "0.1.0"
 description = "Convert DJ libraries (playlists, crates, cues, loops, beat grids) between Mixxx, Rekordbox and Serato."
 readme = "README.md"
@@ -22,7 +22,7 @@ rekordbox = [
 ]
 
 [project.scripts]
-djconvert = "djconvert.cli:main"
+cratemover = "cratemover.cli:main"
 
 [dependency-groups]
 dev = [
@@ -40,7 +40,7 @@ build-backend = "uv_build"
 default-groups = ["dev"]
 
 [tool.uv.build-backend]
-module-name = "djconvert"
+module-name = "cratemover"
 
 [tool.ruff]
 line-length = 100

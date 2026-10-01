@@ -1,7 +1,7 @@
 """Read Rekordbox 6/7's own library: ``master.db`` plus its ANLZ analysis files.
 
 ``master.db`` is an SQLCipher-encrypted SQLite database with a publicly known
-key (see :mod:`djconvert.pioneer.keys`); opening it needs the ``rekordbox``
+key (see :mod:`cratemover.pioneer.keys`); opening it needs the ``rekordbox``
 extra (sqlcipher3). Tracks, cues and playlists are in the database; beat grids
 are only in the analysis files (``share/PIONEER/USBANLZ/…/ANLZ0000.DAT``, the
 ``PQTZ`` tag), so point this at the whole Rekordbox folder:

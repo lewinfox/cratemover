@@ -5,7 +5,7 @@ from pathlib import Path
 
 from conftest import FIXTURES
 
-from djconvert.devices import list_drives
+from cratemover.devices import list_drives
 
 
 def _mounts(tmp_path: Path, lines: list[str]) -> Path:

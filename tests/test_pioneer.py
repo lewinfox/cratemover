@@ -9,10 +9,10 @@ import pytest
 from conftest import FIXTURES, needs_ffmpeg
 from oracles.rekordbox_pdb import Database
 
-from djconvert.convert import ReadOptions, WriteOptions, read_library, write_library
-from djconvert.model import CueRole
-from djconvert.pioneer import anlz
-from djconvert.pioneer.pdb import decode_string, encode_string, read_pdb, write_pdb
+from cratemover.convert import ReadOptions, WriteOptions, read_library, write_library
+from cratemover.model import CueRole
+from cratemover.pioneer import anlz
+from cratemover.pioneer.pdb import decode_string, encode_string, read_pdb, write_pdb
 
 RB = FIXTURES / "rekordbox"
 STICK = RB / "stick-6.8.6"
@@ -126,7 +126,7 @@ def test_anlz_cue_sections_match_rekordbox_byte_for_byte() -> None:
 
 
 def test_grid_expansion() -> None:
-    from djconvert.model import TempoMarker
+    from cratemover.model import TempoMarker
 
     beats = anlz.beats([TempoMarker(1250, 120, 3)], 2250)
     assert beats == [(1, 12000, 250), (2, 12000, 750), (3, 12000, 1250), (4, 12000, 1750)]
@@ -148,7 +148,7 @@ def test_read_real_stick() -> None:
 
 def test_onelibrary_reads_like_export_pdb() -> None:
     pytest.importorskip("sqlcipher3")
-    from djconvert.pioneer.onelibrary import read_onelibrary
+    from cratemover.pioneer.onelibrary import read_onelibrary
 
     ol = read_onelibrary(STICK / "PIONEER/rekordbox/exportLibrary.db")
     pdb = read_pdb((STICK / "PIONEER/rekordbox/export.pdb").read_bytes())
@@ -198,7 +198,7 @@ def test_write_stick_from_mixxx(library_copy: Path, tmp_path: Path) -> None:
 @needs_ffmpeg
 def test_onelibrary_written_alongside(library_copy: Path, tmp_path: Path) -> None:
     pytest.importorskip("sqlcipher3")
-    from djconvert.pioneer.onelibrary import read_onelibrary
+    from cratemover.pioneer.onelibrary import read_onelibrary
 
     stick = tmp_path / "stick"
     stick.mkdir()

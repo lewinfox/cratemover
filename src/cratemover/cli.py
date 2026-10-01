@@ -1,4 +1,4 @@
-"""Command line: ``djconvert inspect``, ``convert``, ``sync`` and ``serve``."""
+"""Command line: ``cratemover inspect``, ``convert``, ``sync`` and ``serve``."""
 
 from __future__ import annotations
 
@@ -68,7 +68,7 @@ def _add_usb_args(parser: argparse.ArgumentParser) -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(prog="djconvert", description=__doc__)
+    parser = argparse.ArgumentParser(prog="cratemover", description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
 
     inspect = sub.add_parser("inspect", help="summarise a library")
@@ -144,7 +144,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "serve":
         import uvicorn
 
-        uvicorn.run("djconvert.web.server:app", host=args.host, port=args.port)
+        uvicorn.run("cratemover.web.server:app", host=args.host, port=args.port)
         return 0
 
     def progress(message: str) -> None:

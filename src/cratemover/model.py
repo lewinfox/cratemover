@@ -3,7 +3,7 @@
 Times are milliseconds on the *reference timeline*: the audio as Rekordbox and
 Serato decode it (encoder delay included). Mixxx decodes some files with a
 different amount of leading audio, so the Mixxx reader and writer shift
-positions on the way in and out (see :mod:`djconvert.offsets`).
+positions on the way in and out (see :mod:`cratemover.offsets`).
 """
 
 from __future__ import annotations

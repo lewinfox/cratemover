@@ -186,7 +186,7 @@ class ConvertResult:
 def _backup(path: Path, stamp: str) -> Path | None:
     if not path.exists():
         return None
-    backup = path.with_name(f"{path.name}.djconvert-{stamp}")
+    backup = path.with_name(f"{path.name}.cratemover-{stamp}")
     if path.is_dir():
         shutil.copytree(path, backup)
     else:
@@ -380,7 +380,7 @@ def write_library(
             f"{missing} of {len(local)} track file(s) were not found locally (check the file access rules)."
         )
     if options.in_place:
-        warnings.append(f"Backups of the previous files end in .djconvert-{stamp}.")
+        warnings.append(f"Backups of the previous files end in .cratemover-{stamp}.")
     return ConvertResult([str(f) for f in files], library.summary(), warnings)
 
 

@@ -1,4 +1,4 @@
-# dj-library-converter
+# cratemover
 
 Read, write, convert and sync DJ libraries between **Mixxx**, **Rekordbox** (USB sticks, XML and
 Rekordbox 6/7's own library) and **Serato** (on the computer or a USB stick): tracks, playlists,
@@ -12,7 +12,7 @@ crates, hot cues, memory cues, loops and beat grids. It has a web UI (Docker) an
 | Rekordbox 6/7 library (`master.db`)|   ✓   |       ✓       |       ✓       |   ✓    |
 | Serato (computer or USB)           |   ✓   |       ✓       |       ✓       |   ✓    |
 
-Everything goes through one format-neutral model (`src/djconvert/model.py`), so every reader works
+Everything goes through one format-neutral model (`src/cratemover/model.py`), so every reader works
 with every writer, and **sync** can keep any two writable libraries in step (Rekordbox's own
 `master.db` can only be read; sync into Rekordbox through a stick or XML).
 
@@ -51,14 +51,14 @@ PYTHON_IMAGE=mirror.gcr.io/library/python:3.13-alpine3.22` to the build.
 ### Command line (uv)
 
 ```sh
-uv run djconvert inspect --from rekordbox_usb /media/me/STICK
-uv run djconvert convert --from mixxx ~/.mixxx --to rekordbox_usb /media/me/STICK
-uv run djconvert convert --from serato /media/me/STICK --serato-root /media/me/STICK \
+uv run cratemover inspect --from rekordbox_usb /media/me/STICK
+uv run cratemover convert --from mixxx ~/.mixxx --to rekordbox_usb /media/me/STICK
+uv run cratemover convert --from serato /media/me/STICK --serato-root /media/me/STICK \
     --to rekordbox_usb /media/me/STICK                       # Serato stick -> CDJ stick, same audio
-uv run djconvert sync --a-format mixxx ~/.mixxx --b-format rekordbox_usb /media/me/STICK --dry-run
-uv run djconvert sync --a-format mixxx ~/.mixxx --b-format serato ~/Music/_Serato_ --direction a_to_b
-uv run djconvert serve                                        # the web UI on http://127.0.0.1:8000
-uv run djconvert convert --help                               # every option
+uv run cratemover sync --a-format mixxx ~/.mixxx --b-format rekordbox_usb /media/me/STICK --dry-run
+uv run cratemover sync --a-format mixxx ~/.mixxx --b-format serato ~/Music/_Serato_ --direction a_to_b
+uv run cratemover serve                                        # the web UI on http://127.0.0.1:8000
+uv run cratemover convert --help                               # every option
 ```
 
 ## USB sticks
@@ -126,7 +126,7 @@ waveforms) at the hashed paths players look for. It works in place on a mounted 
   moved 26 ms for the MP3 encoder delay;
 - waveforms are reused from existing analysis files (the stick's own, or a Rekordbox library's),
   otherwise measured with ffmpeg (about 3 s per track, in parallel), otherwise flat placeholders;
-- the previous `export.pdb` is kept as `export.pdb.djconvert-<time>`;
+- the previous `export.pdb` is kept as `export.pdb.cratemover-<time>`;
 - **OneLibrary** (`exportLibrary.db`), which the CDJ-3000X, CDJ-1500X, OPUS-QUAD, OMNIS-DUO, XDJ-AZ
   and XDJ-AN need, is written when the stick already had one or when asked (`--onelibrary on`).
   This is experimental: nobody has published a hardware test of a third-party one. Otherwise a
@@ -163,7 +163,7 @@ relative to the stick: choose Serato and set "Serato paths relative to" to the s
 ## Sync
 
 Sync reads two libraries, matches their tracks and writes the merged result back **in place**,
-backing up every file it changes (`*.djconvert-<time>`). Quit the DJ software first. One way
+backing up every file it changes (`*.cratemover-<time>`). Quit the DJ software first. One way
 (A → B or B → A) or both ways; *Preview* (`--dry-run`) reports what would change.
 
 - **Matching**, strongest first: the same path (after path rules), then the same file name and
@@ -224,7 +224,7 @@ uv run ruff check && uv run ruff format --check
 uv run python tests/fakelib.py /tmp/demo   # a demo Mixxx library + music to point the app at
 ```
 
-Layout (`src/djconvert/`): `model.py` (the shared model), `mixxx.py`, `rekordbox_xml.py`,
+Layout (`src/cratemover/`): `model.py` (the shared model), `mixxx.py`, `rekordbox_xml.py`,
 `rekordbox_db.py`, `pioneer/` (`pdb` for `export.pdb`, `anlz` for analysis files, `waveform`,
 `onelibrary`, `keys` for the SQLCipher keys, `usb`), `devices.py` (drive detection), `serato/` (`binfile` for `database V2`/crates,
 `markers` for the tag payloads, `tags` for audio-file I/O, `library`), `sync.py` (matching and

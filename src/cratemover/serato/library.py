@@ -7,7 +7,7 @@ the internal drive on macOS (``~/Music/_Serato_``), the drive letter on Windows,
 or the drive's mount point for an external drive with its own ``_Serato_``.
 
 Cue points, loops and beat grids are *not* in the database; they live in the
-audio files' tags (:mod:`djconvert.serato.tags`).
+audio files' tags (:mod:`cratemover.serato.tags`).
 """
 
 from __future__ import annotations

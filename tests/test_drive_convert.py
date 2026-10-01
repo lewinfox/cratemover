@@ -4,10 +4,10 @@ from pathlib import Path
 
 from conftest import needs_ffmpeg
 
-from djconvert.convert import ReadOptions, WriteOptions, read_library, write_library
-from djconvert.devices import _libraries
-from djconvert.drive_convert import DriveConvertOptions, convert_drive, list_backups, restore_drive
-from djconvert.serato.tags import read_tags
+from cratemover.convert import ReadOptions, WriteOptions, read_library, write_library
+from cratemover.devices import _libraries
+from cratemover.drive_convert import DriveConvertOptions, convert_drive, list_backups, restore_drive
+from cratemover.serato.tags import read_tags
 
 
 def _hot(lib) -> dict[str, list[tuple[int | None, int]]]:  # type: ignore[no-untyped-def]

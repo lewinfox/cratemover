@@ -10,7 +10,7 @@ Layouts are from Holzhaus/serato-tags (docs/) and Mixxx's
 * ``Serato BeatGrid``: beat grid markers (float32 seconds).
 
 Positions here are in milliseconds (Markers) or seconds (BeatGrid), exactly as
-stored. Colours are the *stored* values; see :mod:`djconvert.colours`.
+stored. Colours are the *stored* values; see :mod:`cratemover.colours`.
 """
 
 from __future__ import annotations

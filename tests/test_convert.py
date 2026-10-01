@@ -6,15 +6,15 @@ from pathlib import Path
 import pytest
 from conftest import FIXTURES
 
-from djconvert.convert import (
+from cratemover.convert import (
     ReadOptions,
     WriteOptions,
     read_library,
     write_library,
 )
-from djconvert.model import CueRole, Library, Track
-from djconvert.paths import apply_rules, parse_rules
-from djconvert.serato.library import from_serato_path, to_serato_path
+from cratemover.model import CueRole, Library, Track
+from cratemover.paths import apply_rules, parse_rules
+from cratemover.serato.library import from_serato_path, to_serato_path
 
 
 def _by_title(library: Library) -> dict[str, Track]:
@@ -159,7 +159,7 @@ def test_selection(mixxx_root: Path, tmp_path: Path) -> None:
 
 
 def test_serato_sample_rate_text() -> None:
-    from djconvert.serato.library import _sample_rate
+    from cratemover.serato.library import _sample_rate
 
     assert [_sample_rate(t) for t in ("44100", "44.1", "44.1k", "48.0 kHz", "")] == [
         44100,
@@ -172,8 +172,8 @@ def test_serato_sample_rate_text() -> None:
 
 def test_serato_mp3_frame_offset(library_copy: Path, tmp_path: Path) -> None:
     """ffmpeg's MP3s have an Info header without a LAME tag: Serato counts that frame."""
-    from djconvert.offsets import mp3_header_case, serato_offset_ms
-    from djconvert.serato.tags import read_tags
+    from cratemover.offsets import mp3_header_case, serato_offset_ms
+    from cratemover.serato.tags import read_tags
 
     mp3 = library_copy / "music" / "Alpha - First Light.mp3"
     assert mp3_header_case(mp3) == "B"

@@ -2,7 +2,7 @@
 
 Newer players (CDJ-3000X, CDJ-1500X, OPUS-QUAD, OMNIS-DUO, XDJ-AZ, XDJ-AN)
 only browse sticks that carry it. It is SQLCipher 4 with a fixed public key
-(:mod:`djconvert.pioneer.keys`). The schema and fixed rows below were read from
+(:mod:`cratemover.pioneer.keys`). The schema and fixed rows below were read from
 a real Rekordbox 6.8.6 export (acrilique/rekordlib test data). Cue points,
 beat grids and waveforms still come from the ANLZ files, which Rekordbox's own
 export relies on too (its ``cue`` table was empty).
@@ -145,7 +145,7 @@ def write_onelibrary(pdb: Pdb, path: Path) -> None:
 
 
 def read_onelibrary(path: Path) -> Pdb:
-    """The same shape :func:`djconvert.pioneer.pdb.read_pdb` returns, from a OneLibrary database."""
+    """The same shape :func:`cratemover.pioneer.pdb.read_pdb` returns, from a OneLibrary database."""
     from .pdb import PlaylistNode, TrackRow
 
     with tempfile.TemporaryDirectory() as tmp:

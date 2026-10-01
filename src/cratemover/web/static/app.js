@@ -23,7 +23,7 @@ const NEXT_STEPS = {
     <li>Right-click playlists there › <i>Import Playlist</i>.</li></ol>`,
   rekordbox_usb: `<h4>Using the stick</h4><ol>
     <li>Eject it safely, then plug it into a player, or into the laptop (Rekordbox shows it under Devices; Mixxx lists it under Rekordbox). Pre-NXS2 players only play MP3 reliably.</li>
-    <li>If something looks wrong, the previous <code>export.pdb</code> is kept next to the new one with a <code>.djconvert-…</code> suffix.</li></ol>`,
+    <li>If something looks wrong, the previous <code>export.pdb</code> is kept next to the new one with a <code>.cratemover-…</code> suffix.</li></ol>`,
   serato: `<h4>Using it in Serato</h4><ol>
     <li>Start Serato. Cue points, loops and beat grids come from the files' tags, if you chose to write them.</li></ol>`,
   mixxx: `<h4>Using it in Mixxx</h4><ol>

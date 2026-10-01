@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import pytest
 
-from djconvert.grid import beat_positions, first_downbeat_ms, sections_from_beats, simplify
-from djconvert.keys import KeyNotation, format_key, key_from_mixxx_id, mixxx_key_id, parse_key
-from djconvert.model import Key, TempoMarker
+from cratemover.grid import beat_positions, first_downbeat_ms, sections_from_beats, simplify
+from cratemover.keys import KeyNotation, format_key, key_from_mixxx_id, mixxx_key_id, parse_key
+from cratemover.model import Key, TempoMarker
 
 
 @pytest.mark.parametrize(

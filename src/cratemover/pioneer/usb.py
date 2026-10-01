@@ -388,7 +388,7 @@ def _build_files(
 
 def _move_aside(path: Path, stamp: str, result: UsbWriteResult, why: str) -> None:
     if path.exists():
-        backup = path.with_name(f"{path.name}.djconvert-{stamp}")
+        backup = path.with_name(f"{path.name}.cratemover-{stamp}")
         os.replace(path, backup)
         result.warnings.append(f"Moved {path.name} aside to {backup.name}: {why}")
 
@@ -571,7 +571,7 @@ def write_rekordbox_usb(
     rekordbox_dir.mkdir(parents=True, exist_ok=True)
     db_path = rekordbox_dir / "export.pdb"
     if db_path.exists():
-        shutil.copyfile(db_path, db_path.with_name(f"export.pdb.djconvert-{stamp}"))
+        shutil.copyfile(db_path, db_path.with_name(f"export.pdb.cratemover-{stamp}"))
     partial = db_path.with_name("export.pdb.part")
     partial.write_bytes(write_pdb(pdb))
     os.replace(partial, db_path)
@@ -585,7 +585,7 @@ def write_rekordbox_usb(
 
         if one_library.exists():
             shutil.copyfile(
-                one_library, one_library.with_name(f"exportLibrary.db.djconvert-{stamp}")
+                one_library, one_library.with_name(f"exportLibrary.db.cratemover-{stamp}")
             )
         try:
             write_onelibrary(pdb, one_library)

@@ -52,7 +52,7 @@ from ..paths import make_resolver, parse_rules
 from ..sync import CuePolicy, PlaylistPolicy, Prefer, SyncOptions
 
 EXPORT_DIR = Path(os.environ.get("EXPORT_DIR", "export")).resolve()
-UPLOAD_DIR = Path(os.environ.get("UPLOAD_DIR") or tempfile.mkdtemp(prefix="djconvert-uploads-"))
+UPLOAD_DIR = Path(os.environ.get("UPLOAD_DIR") or tempfile.mkdtemp(prefix="cratemover-uploads-"))
 BROWSE_ROOTS = [
     *usb_roots(),
     *(
@@ -67,7 +67,7 @@ BROWSE_ROOTS = list(dict.fromkeys(BROWSE_ROOTS))
 
 BACKUP_DIR = Path(os.environ.get("BACKUP_DIR") or EXPORT_DIR / "backups").resolve()
 
-app = FastAPI(title="DJ Library Converter", version=__version__)
+app = FastAPI(title="Cratemover", version=__version__)
 
 
 # --- background jobs --------------------------------------------------------------------

@@ -5,7 +5,7 @@ from pathlib import Path
 
 from conftest import needs_ffmpeg
 
-from djconvert.convert import (
+from cratemover.convert import (
     ReadOptions,
     SyncSide,
     WriteOptions,
@@ -13,8 +13,8 @@ from djconvert.convert import (
     sync_libraries,
     write_library,
 )
-from djconvert.model import Cue, CueRole, Library, Playlist, TempoMarker, Track
-from djconvert.sync import CuePolicy, PlaylistPolicy, Prefer, SyncOptions, match_tracks, merge
+from cratemover.model import Cue, CueRole, Library, Playlist, TempoMarker, Track
+from cratemover.sync import CuePolicy, PlaylistPolicy, Prefer, SyncOptions, match_tracks, merge
 
 
 def _lib(*tracks: Track, playlists: dict[str, list[str]] | None = None) -> Library:
@@ -151,7 +151,7 @@ def test_two_way_sync_mixxx_and_stick(library_copy: Path, tmp_path: Path) -> Non
     assert (6, 5000) in [(c.slot, round(c.position_ms)) for c in drift.hot_cues]
     # Mixxx's playlists weren't duplicated, and a backup was made.
     assert sorted(p.name for _, p in mixxx_lib.playlists.walk()).count("Warm Up") == 1
-    assert list((library_copy / "mixxx").glob("mixxxdb.sqlite.djconvert-*"))
+    assert list((library_copy / "mixxx").glob("mixxxdb.sqlite.cratemover-*"))
     # Syncing again changes nothing.
     again = sync_libraries(
         SyncSide(mixxx, WriteOptions("mixxx", "")),

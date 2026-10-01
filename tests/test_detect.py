@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from djconvert.detect import detect_libraries
-from djconvert.paths import infer_access_rules
+from cratemover.detect import detect_libraries
+from cratemover.paths import infer_access_rules
 
 
 def _touch(path: Path, data: bytes = b"") -> Path:

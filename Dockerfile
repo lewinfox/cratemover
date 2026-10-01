@@ -52,5 +52,5 @@ ENV PATH="/app/.venv/bin:$PATH" \
     EXPORT_DIR=/export \
     UPLOAD_DIR=/tmp/uploads
 EXPOSE 8000
-ENTRYPOINT ["djconvert"]
+ENTRYPOINT ["cratemover"]
 CMD ["serve", "--host", "0.0.0.0", "--port", "8000"]

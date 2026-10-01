@@ -13,7 +13,7 @@ def client(mixxx_root: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) ->
     monkeypatch.setenv("EXPORT_DIR", str(tmp_path / "export"))
     monkeypatch.setenv("BROWSE_ROOTS", f"{mixxx_root}:{tmp_path / 'export'}")
     monkeypatch.setenv("UPLOAD_DIR", str(tmp_path / "uploads"))
-    from djconvert.web import server
+    from cratemover.web import server
 
     importlib.reload(server)
     return TestClient(server.app)
@@ -30,7 +30,7 @@ def _wait(client: TestClient, job_id: str) -> dict:
 
 
 def test_index_and_info(client: TestClient, mixxx_root: Path) -> None:
-    assert "DJ Library Converter" in client.get("/").text
+    assert "Cratemover" in client.get("/").text
     info = client.get("/api/info").json()
     assert {"format": "mixxx", "path": str(mixxx_root / "mixxx" / "mixxxdb.sqlite")} in info[
         "suggestions"
@@ -86,7 +86,7 @@ def test_sync_endpoint_preview_and_run(
     stick = tmp_path / "export" / "STICK"
     stick.mkdir(parents=True)
     os.environ["BROWSE_ROOTS"] = f"{library_copy}:{tmp_path / 'export'}"
-    from djconvert.web import server
+    from cratemover.web import server
 
     server.BROWSE_ROOTS[:] = [library_copy, tmp_path / "export"]
     body = {
@@ -122,7 +122,7 @@ def test_drives_endpoint(client: TestClient) -> None:
 
 
 def test_sync_sends_only_the_chosen_playlists(library_copy: Path, tmp_path: Path) -> None:
-    from djconvert.convert import (
+    from cratemover.convert import (
         ReadOptions,
         SyncSide,
         WriteOptions,
@@ -131,7 +131,7 @@ def test_sync_sends_only_the_chosen_playlists(library_copy: Path, tmp_path: Path
         sync_libraries,
         write_library,
     )
-    from djconvert.sync import SyncOptions
+    from cratemover.sync import SyncOptions
 
     mixxx = ReadOptions("mixxx", str(library_copy / "mixxx"))
     source = read_library(mixxx)

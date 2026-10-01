@@ -5,9 +5,9 @@ from pathlib import Path
 import pytest
 from conftest import FIXTURES, needs_ffmpeg
 
-from djconvert.serato import markers as m
-from djconvert.serato.binfile import Field, dump, parse
-from djconvert.serato.tags import read_tags, write_tags
+from cratemover.serato import markers as m
+from cratemover.serato.binfile import Field, dump, parse
+from cratemover.serato.tags import read_tags, write_tags
 
 TAGS = FIXTURES / "serato-tags"
 
