@@ -265,3 +265,23 @@ def test_notes_say_memory_cues_become_hot_cues_in_serato() -> None:
     [note] = drive_convert.cue_changes(lib, Format.SERATO)
     assert note.startswith("1 memory cue(s) on 1 track(s) became Serato hot cues")
     assert drive_convert.cue_changes(lib, Format.REKORDBOX_USB) == []
+
+
+def test_refuses_a_drive_another_program_has_open(tmp_path: Path) -> None:
+    import subprocess
+    import sys
+    import time
+
+    stick = tmp_path / "STICK"
+    (stick / "_Serato_").mkdir(parents=True)
+    held = stick / "_Serato_" / "database V2"
+    held.write_bytes(b"")
+    holder = subprocess.Popen(
+        [sys.executable, "-c", f"f = open({str(held)!r}); import time; time.sleep(30)"]
+    )
+    try:
+        time.sleep(0.5)
+        with pytest.raises(ValueError, match=r"Close these first(.|\n)*database V2 open"):
+            convert_drive(stick, DriveConvertOptions(target=Format.REKORDBOX_USB))
+    finally:
+        holder.kill()

@@ -180,3 +180,60 @@ def list_drives(
                 if _libraries(candidate):
                     drives[str(candidate)] = _drive(candidate)
     return sorted(drives.values(), key=lambda d: d.path)
+
+
+# DJ programs that write to a stick on their own (Rekordbox while a stick is plugged in,
+# Serato when it closes), matched against process names.
+DJ_PROGRAMS = ("rekordbox", "serato")
+
+
+def drive_users(root: Path) -> list[str]:
+    """Programs that could change the drive under us: any process with a file or folder open
+    on it, and any running Rekordbox or Serato. Empty when it's safe to write."""
+    root = root.resolve()
+    users: dict[int, str] = {}
+    if Path("/proc").is_dir():
+        for proc in Path("/proc").iterdir():
+            if not proc.name.isdigit() or int(proc.name) == os.getpid():
+                continue
+            try:
+                name = (proc / "comm").read_text().strip()
+            except OSError:
+                continue
+            if any(p in name.lower() for p in DJ_PROGRAMS):
+                users[int(proc.name)] = f"{name} (running)"
+                continue
+            try:
+                links = [proc / "cwd", *(proc / "fd").iterdir()]
+            except OSError:
+                continue  # another user's process: we can't see its files
+            for link in links:
+                try:
+                    target = Path(os.readlink(link))
+                except OSError:
+                    continue
+                if target == root or root in target.parents:
+                    users[int(proc.name)] = f"{name} (has {target.relative_to(root)} open)"
+                    break
+    else:
+        try:
+            import psutil
+        except ImportError:
+            return []
+        for proc in psutil.process_iter(["pid", "name"]):
+            name = proc.info["name"] or "?"
+            if proc.info["pid"] == os.getpid():
+                continue
+            if any(p in name.lower() for p in DJ_PROGRAMS):
+                users[proc.info["pid"]] = f"{name} (running)"
+                continue
+            try:
+                for f in proc.open_files():
+                    if root in Path(f.path).parents:
+                        users[proc.info["pid"]] = (
+                            f"{name} (has {Path(f.path).relative_to(root)} open)"
+                        )
+                        break
+            except (psutil.AccessDenied, psutil.NoSuchProcess):
+                continue
+    return [f"{text}, process {pid}" for pid, text in sorted(users.items())]

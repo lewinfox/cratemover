@@ -31,7 +31,7 @@ from typing import Any
 
 from . import fingerprint, layout
 from .convert import ReadOptions, WriteOptions, read_library, write_library
-from .devices import _libraries
+from .devices import _libraries, drive_users
 from .fingerprint import SCHEMA as FINGERPRINT_SCHEMA
 from .model import Format, Library
 from .offsets import Mp3Decoder
@@ -212,9 +212,13 @@ def list_backups(backup_root: Path) -> list[dict[str, Any]]:
     return out
 
 
-def restore_drive(backup: Path, root: Path, progress: Progress = print) -> list[str]:
+def restore_drive(
+    backup: Path, root: Path, progress: Progress = print, check_idle: bool = True
+) -> list[str]:
     """Put back every file in the backup byte for byte, remove what the conversion added, and
     check every restored file against its recorded checksum."""
+    if check_idle:  # a rollback mid-conversion goes ahead regardless: a half-done drive is worse
+        ensure_idle(root)
     manifest = json.loads((backup / "manifest.json").read_text())
     done = []
     files = backup / "files"
@@ -239,12 +243,18 @@ def restore_drive(backup: Path, root: Path, progress: Progress = print) -> list[
         done.append(f"removed {removed} file(s) the conversion had added")
     progress(f"Restoring {len(checksums)} file(s)")
     _steps(progress, len(checksums))
-    for rel in checksums:
+    copied: list[str] = []
+    for rel, digest in checksums.items():
         _tick(progress)
-        (root / rel).parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(files / rel, root / rel)
-    progress("Checking the restored files")
-    wrong = [rel for rel, digest in checksums.items() if _sha256(root / rel) != digest]
+        target = root / rel
+        same_size = target.is_file() and target.stat().st_size == (files / rel).stat().st_size
+        if same_size and _sha256(target) == digest:
+            continue  # already as backed up: leave it (fewer writes to the stick)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(files / rel, target)
+        copied.append(rel)
+    progress(f"Copied back {len(copied)} changed file(s); checking them")
+    wrong = [rel for rel in copied if _sha256(root / rel) != checksums[rel]]
     if wrong:
         raise OSError(
             f"{len(wrong)} restored file(s) don't match the backup: {', '.join(wrong[:5])}"
@@ -270,6 +280,7 @@ def convert_drive(
     raised, so a drive never ends up with two libraries or a half-written one.
     """
     root = root.resolve()
+    ensure_idle(root)
     target = options.target
     if target not in TARGETS:
         raise ValueError(f"can't convert a drive to {target}")
@@ -312,6 +323,7 @@ def convert_drive(
     result = DriveConvertResult(backup=str(backup), source_format=source_format, notes=notes)
     before = _files(root)
 
+    ensure_idle(root)  # again: the backup can take a while
     try:
         # 2. Convert: the old library goes first, so there's never a second one on the drive.
         for name in _library_dirs(source_format):
@@ -338,8 +350,8 @@ def convert_drive(
     except Exception as exc:
         _record_created(root, before, backup)
         progress(f"Converting failed ({exc}): restoring the drive from the backup")
-        restore_drive(backup, root, progress)
-        raise ValueError(f"Converting failed ({exc}), so the drive was put back as it was") from exc
+        restore_drive(backup, root, progress, check_idle=False)
+        raise RolledBack(f"Converting failed: {exc}", []) from exc
     manifest_path = _record_created(root, before, backup)
 
     # 3. Verify, and 4. check nothing else is on the drive.
@@ -351,11 +363,8 @@ def convert_drive(
     problems += check_drive(root, before, source_format, target, library, moves, checksums)
     if problems:
         progress("The check failed: restoring the drive from the backup")
-        restore_drive(backup, root, progress)
-        raise ValueError(
-            "The converted drive didn't pass its checks, so it was put back as it was:\n- "
-            + "\n- ".join(problems)
-        )
+        restore_drive(backup, root, progress, check_idle=False)
+        raise RolledBack("The converted drive didn't pass its checks", problems)
     manifest = json.loads(manifest_path.read_text())
     manifest["converted_to"] = {
         "format": target,
@@ -411,6 +420,26 @@ def relocate(root: Path, library: Library, target: Format, progress: Progress) -
     return {str(o.relative_to(root)): str(n.relative_to(root)) for o, n in moves.items()}
 
 
+class RolledBack(ValueError):
+    """A conversion failed, and the drive was restored from the backup and checked."""
+
+    def __init__(self, reason: str, problems: list[str]) -> None:
+        super().__init__(reason + ("\n- " + "\n- ".join(problems) if problems else ""))
+        self.reason, self.problems = reason, problems
+
+
+def ensure_idle(root: Path) -> None:
+    """Refuse to change a drive while another program could be writing to it: Rekordbox keeps
+    a stick's database open after exporting, and wrote brokendb on a stick whose files were
+    replaced (byte-identically) underneath it."""
+    users = drive_users(root)
+    if users:
+        raise ValueError(
+            "Close these first, so nothing else writes to the drive while it's changed:\n- "
+            + "\n- ".join(users)
+        )
+
+
 def cue_changes(library: Library, target: Format) -> list[str]:
     """Warnings for what a conversion changes about cues and grids: not errors (the timings
     survive, or the target can't hold them), but worth knowing before converting back."""
@@ -456,6 +485,13 @@ def cue_changes(library: Library, target: Format) -> list[str]:
                 f"{sum(lite_hidden.values())} hot cue(s) on {len(lite_hidden)} track(s) are in "
                 "slots 5-8. Serato DJ Lite shows only slots 1-4: they're kept in the files, and "
                 "Serato DJ Pro shows them."
+            )
+        slips = [t for t in library.tracks.values() if fingerprint.grid_slip_ms(t.grid) > 1.0]
+        if slips:
+            worst = max(fingerprint.grid_slip_ms(t.grid) for t in slips)
+            notes.append(
+                f"{len(slips)} track(s) have uneven beats between grid markers. Serato spaces "
+                f"beats evenly between markers, so some move (by up to {worst:.1f} ms)."
             )
         if midbar:
             notes.append(
