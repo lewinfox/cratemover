@@ -75,15 +75,17 @@
         </div>
         <label class="check"><input type="checkbox" id="wiz-add" checked> Add tracks the other library doesn't have (copying them onto USB sticks)</label>
       </div>
-      <label class="check warn"><input type="checkbox" id="wiz-serato-tags"> Serato: write cues and grids into the audio files (Serato keeps them there)</label>
-      <label class="check"><input type="checkbox" id="wiz-waveforms" checked> Rekordbox stick: draw waveforms from the audio</label>
-      <label>Rekordbox stick: OneLibrary database (rekordbox 7, newest players)
-        <select id="wiz-onelibrary">
-          <option value="auto">If the stick already has one</option>
-          <option value="on">Always</option>
-          <option value="off">Never</option>
-        </select>
-      </label>
+      <label class="check warn" id="wiz-serato-opts"><input type="checkbox" id="wiz-serato-tags"> Serato: write cues and grids into the audio files (Serato keeps them there)</label>
+      <div id="wiz-rekordbox-opts">
+        <label class="check"><input type="checkbox" id="wiz-waveforms" checked> Rekordbox stick: draw waveforms from the audio</label>
+        <label>Rekordbox stick: OneLibrary database (rekordbox 7, newest players)
+          <select id="wiz-onelibrary">
+            <option value="auto">If the stick already has one</option>
+            <option value="on">Always</option>
+            <option value="off">Never</option>
+          </select>
+        </label>
+      </div>
     </details>
     <div class="actions">
       <button type="button" id="wiz-preview">3. Preview changes</button>

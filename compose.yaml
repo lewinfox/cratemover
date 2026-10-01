@@ -3,10 +3,9 @@
 # Libraries store absolute paths to tracks, so music and USB sticks are mounted
 # at the same path inside the container as on your machine.
 #
-# Writable by default, because converting to a stick or syncing updates them in
-# place (every file changed is backed up first): the Mixxx folder and USB sticks.
-# Read-only by default: your music (set MUSIC_ACCESS=rw to write Serato cue tags
-# into it) and Rekordbox's own library (it can only be read).
+# Everything is mounted writable, because converting and syncing update libraries in
+# place (every file changed is backed up first), and Serato keeps cues in the music files.
+# Except Rekordbox's own folder: the app only ever reads it.
 services:
   dj-library-converter:
     build: .
@@ -20,11 +19,11 @@ services:
       USB_ROOTS: "${USB_DIR:-/media}"
     volumes:
       # Drop a rekordbox.xml, a mixxxdb.sqlite or a _Serato_ folder in ./sources.
-      - "./sources:/sources/files:ro"
+      - "./sources:/sources/files"
       - "${MIXXX_DIR:-${HOME}/.mixxx}:/sources/mixxx"
       # Rekordbox 6/7's folder: ~/Library/Pioneer/rekordbox (macOS), %APPDATA%/Pioneer/rekordbox (Windows).
       - "${REKORDBOX_DIR:-./sources/rekordbox}:/sources/rekordbox:ro"
-      - "${MUSIC_DIR:-${HOME}/Music}:${MUSIC_DIR:-${HOME}/Music}:${MUSIC_ACCESS:-ro}"
+      - "${MUSIC_DIR:-${HOME}/Music}:${MUSIC_DIR:-${HOME}/Music}"
       # Where removable drives appear: /media (most Linux desktops), /run/media, /Volumes (macOS).
       # rslave passes mounts made after startup into the container, so hot-plugged sticks show
       # up (and unplugged ones go). It needs the host's / to be a shared mount, which systemd

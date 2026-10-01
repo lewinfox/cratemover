@@ -373,7 +373,12 @@ function renderWizard() {
     : merging ? `Tracks, cues, grids and playlists are merged into ${dst.label}. Every file changed is backed up first.`
     : dst.format === "rekordbox_xml" ? (dst.hint || "")
     : `A new ${STICK_FORMATS[dst.format]} library is written onto the drive, and the music is copied onto it.`;
+  // Only show options for the formats this run writes: the target, plus the source when syncing both ways.
+  const writes = new Set(ready ? [dst.format, ...(both ? [src.format] : [])] : []);
   $("wiz-sync-opts").classList.toggle("hidden", !merging);
+  $("wiz-serato-opts").classList.toggle("hidden", !writes.has("serato"));
+  $("wiz-rekordbox-opts").classList.toggle("hidden", !writes.has("rekordbox_usb"));
+  $("wiz-options").classList.toggle("hidden", !merging && !writes.has("serato") && !writes.has("rekordbox_usb"));
   $("wiz-preview").classList.toggle("hidden", !merging || w.done);
   $("wiz-preview").disabled = !ready || w.busy;
   $("wiz-run").classList.toggle("hidden", w.done);

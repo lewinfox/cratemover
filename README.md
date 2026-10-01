@@ -33,9 +33,8 @@ docker compose up --build        # then open http://localhost:8000
 | `USB_MOUNT_MODE`| `rw,rslave`           |                         | `rslave` passes sticks plugged in later into the container    |
 | `MIXXX_DIR`     | `~/.mixxx`            | `/sources/mixxx`, writable | Mixxx's folder with `mixxxdb.sqlite`                     |
 | `REKORDBOX_DIR` | `./sources/rekordbox` | `/sources/rekordbox` (ro) | Rekordbox 6/7's folder (`~/Library/Pioneer/rekordbox`, `%APPDATA%\Pioneer\rekordbox`) |
-| `MUSIC_DIR`     | `~/Music`             | **same path** (ro)      | Your music (a Mac's `~/Music/_Serato_` comes with it)        |
-| `MUSIC_ACCESS`  | `ro`                  |                         | `rw` lets it write Serato cue tags into your music files     |
-| —               | `./sources`           | `/sources/files` (ro)   | Drop a `rekordbox.xml`, `mixxxdb.sqlite` or `_Serato_` here  |
+| `MUSIC_DIR`     | `~/Music`             | **same path**, writable | Your music (a Mac's `~/Music/_Serato_` comes with it)        |
+| —               | `./sources`           | `/sources/files`        | Drop a `rekordbox.xml`, `mixxxdb.sqlite` or `_Serato_` here  |
 | `EXPORT_DIR`    | `./export`            | `/export`               | Where new libraries are written                              |
 | `PORT`, `UID`/`GID` | `8000`, `1000`    |                         | Port on 127.0.0.1; the user files are written as             |
 
