@@ -94,6 +94,28 @@ What "works" means for each reader:
   ours is random); `content.dateAdded`, which rekordbox takes from the collection's
   `StockDate` (date added to the collection) while `export.pdb` holds `DateCreated`. Converting
   from `export.pdb` can't recover `StockDate`.
+- **2026-10-02, Serato crate Copy with a shared track (stick FX5Z):** crates `test_crate_1` and
+  `test_crate_2` shared one track (HUGEL). Copying both crates to the stick put HUGEL in *both*
+  folders (`test_crate_1/` and `test_crate_2/`, identical files), and then each crate listed
+  *both* copies, in the `.crate` files and in Serato 4's stick database alike: one track, two
+  files, four crate entries. Probably a Serato bug (it seems to treat the two copies as one
+  track). cratemover deliberately departs from this when it relocates audio for Serato: a
+  shared track is stored once, in its first crate's folder, and listed once per crate. See
+  `src/cratemover/layout.py` and #5.
+- **2026-10-02, Rekordbox file names:** rekordbox cuts a file's stem to 44 characters when it
+  exports (checked against the originals: an 81-character name became 44, mid-word, trailing
+  space kept). cratemover's relocation does the same. What it does with two names that cut to
+  the same thing is still untested.
+- **2026-10-02, round trip Rekordbox → Serato → Rekordbox (stick 9HKT): `brokendb` cause
+  found.** rekordbox 7.2.19 crashed ("Unexpected application error") and wrote `brokendb` on the
+  stick cratemover converted back. Swap tests: rekordbox's original `export.pdb` with our analysis
+  files loaded fine (A); our `export.pdb` with only its three key names changed from musical
+  (`Cm`, `Bb`, `Abm`) to Camelot (`5A`, `6B`, `1A`), 8 bytes, loaded fine (C). So rekordbox
+  rejects musical key names in a stick's key table. cratemover now always writes Camelot there,
+  as rekordbox's own exports do. Earlier converted sticks loaded because they had no keys. The
+  round trip itself kept tracks, playlists, paths, audio frames, cue positions and grids (beats
+  within 0.007 ms); memory cues came back as hot cues (warned), and Serato DJ Lite showed only
+  hot cues 1-4 of 6 (it has 4 slots; all 6 stay in the file).
 
 ## 3. What breaks a good stick
 
