@@ -230,15 +230,12 @@ _UNSET = BeforeValidator(lambda v: v or None)
 
 class DriveConvertRequest(BaseModel):
     path: str
-    targets: list[Format]
+    target: Format
     source_format: Annotated[Format | None, _UNSET] = None
     full_backup: bool = False
-    keep_source: bool = True
-    serato_write_tags: bool = True
     waveforms: bool = True
-    onelibrary: OneLibraryMode = OneLibraryMode.AUTO
+    onelibrary: bool = False
     mp3_decoder: Mp3Decoder = Mp3Decoder.MAD
-    xml_root: str = ""
 
 
 def _drive_path(path: str) -> Path:
@@ -253,16 +250,13 @@ def drive_convert(request: DriveConvertRequest) -> dict[str, str]:
     """Back a drive up and convert its library to the target format(s), in place."""
     drive = _drive_path(request.path)
     options = DriveConvertOptions(
-        targets=request.targets,
+        target=request.target,
         source_format=request.source_format,
         backup_dir=str(BACKUP_DIR),
         full_backup=request.full_backup,
-        keep_source=request.keep_source,
-        serato_write_tags=request.serato_write_tags,
         waveforms=request.waveforms,
         onelibrary=request.onelibrary,
         mp3_decoder=request.mp3_decoder,
-        xml_root=request.xml_root,
     )
 
     def work(job: Job, progress: Any) -> dict[str, Any]:

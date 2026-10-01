@@ -512,12 +512,11 @@ function renderConvertPanel() {
   const source = STICK_FORMATS[tab.format];
   w.target = target;
   $("cv-title").textContent = `Convert ${d.label} from ${source} to ${name}`;
-  $("cv-hint").textContent = `A ${name} library is written onto this drive, using the music already on it. The drive is backed up first. Nothing on the computer changes.`;
-  $("cv-keep-label").textContent = `Keep the ${source} library too (the drive then works in both)`;
+  $("cv-hint").textContent = `The ${source} library on this drive is replaced by a ${name} library that uses the music already on it. Nothing else is added to the drive.` +
+    (target === "serato" ? " Serato keeps cues and grids inside the audio files, so those are updated." : "") +
+    ` The library is backed up to this computer first, so it can be restored.`;
   $("cv-full-label").textContent = `Back up the whole drive (${gb(d.total_bytes - d.free_bytes)}), not just the library folders`;
-  $("cv-tags-row").classList.toggle("hidden", target !== "serato");
   $("cv-rekordbox").classList.toggle("hidden", target !== "rekordbox_usb");
-  $("cv-xmlroot").placeholder = `${d.path} — or E:/ on Windows, /Volumes/${d.label} on a Mac`;
   $("cv-run").classList.toggle("hidden", w.done);
   $("cv-run").disabled = w.busy;
   $("cv-cancel").textContent = w.done ? "Close" : "Cancel";
@@ -533,13 +532,10 @@ async function runDriveConvert() {
   try {
     const { job_id } = await post("/api/drives/convert", {
       path: tab.drive.path,
-      targets: [w.target],
+      target: w.target,
       source_format: tab.format,
-      keep_source: $("cv-keep").checked,
       full_backup: $("cv-full").checked,
-      serato_write_tags: $("cv-tags").checked,
-      onelibrary: $("cv-onelibrary").value,
-      xml_root: $("cv-xmlroot").value.trim(),
+      onelibrary: $("cv-onelibrary").checked,
     });
     const r = await waitForJob(job_id, status);
     $("cv-report").innerHTML = `<p><b>Converted to ${escapeHtml(STICK_FORMATS[w.target])}.</b> Backup: <code>${escapeHtml(r.backup)}</code>` +

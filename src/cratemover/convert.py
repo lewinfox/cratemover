@@ -240,12 +240,29 @@ def _stick_xml(root: Path, options: WriteOptions, progress: Progress) -> Path:
     return target
 
 
+def _refuse_second_library(folder: Path, fmt: Format) -> None:
+    """A drive holds one DJ library: writing a second one next to it can break the first
+    program's reading of it (see docs/usb-compatibility.md). Convert the drive instead."""
+    from .devices import _libraries
+
+    if not folder.is_dir():
+        return
+    others = sorted({lib["format"] for lib in _libraries(folder)} - {fmt})
+    if others:
+        raise ValueError(
+            f"{folder} already has a {', '.join(others)} library. cratemover won't put a second "
+            f"library on a drive: convert the drive instead, which replaces one with the other."
+        )
+
+
 def write_library(
     library: Library,
     options: WriteOptions,
     access_rules: list[tuple[str, str]],
     progress: Progress = _noop,
 ) -> ConvertResult:
+    if options.format in (Format.REKORDBOX_USB, Format.SERATO):
+        _refuse_second_library(Path(options.output_dir), options.format)
     library = select(copy.deepcopy(library), options.playlists)
     # Find local files using source locations, then rewrite locations for the target.
     source_resolve = make_resolver(access_rules)

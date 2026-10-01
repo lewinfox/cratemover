@@ -102,21 +102,29 @@ stick only shows up in the file browser.
 
 **Convert a stick in one go.** Plug the stick in, press *Convert drive to Rekordbox* or *Convert
 drive to Serato* next to it in the *USB drives* panel, then *Back up and convert* (or POST to
-`/api/drives/convert`). It:
+`/api/drives/convert`). It replaces one program's library with the other's, and nothing else:
 
-1. backs up the stick's library folders (`PIONEER`, `_Serato_`) and, for every audio file whose
-   Serato tags will change, the original tag values, to `BACKUP_DIR` (default `exports/backups`);
-   tick *Back up the whole drive* to copy the whole stick instead. It checks there's room first;
-2. reads the library on the stick and writes the other format onto the same stick, pointing at
-   the audio already there (nothing is copied unless a format has to be transcoded, e.g. Ogg to MP3
-   for Rekordbox), with cues and grids moved for each program's MP3 timing;
-3. keeps the original library by default, so the stick works in both programs;
-   untick *Keep the … library too* to remove it.
+1. backs up the stick's library folder (`PIONEER` or `_Serato_`) and, for every audio file whose
+   Serato tags will change, the original tag values, to `BACKUP_DIR` on the computer (default
+   `exports/backups`); tick *Back up the whole drive* to copy the whole stick instead. It checks
+   there's room first. Nothing is backed up onto the stick;
+2. reads the library on the stick, deletes its folder, and writes the other format onto the same
+   stick, pointing at the audio already there (nothing is copied unless a format has to be
+   transcoded, e.g. Ogg to MP3 for Rekordbox), with cues and grids moved for each program's MP3
+   timing;
+3. reads the new library back and checks every track, hot cue, beat grid and playlist made it;
+4. checks nothing else changed on the stick: only the new library (and any transcoded audio) was
+   added, only the old library went, and no backup or temporary files are left.
+
+If step 3 or 4 fails, the stick is restored from the backup and the conversion reports why. A
+stick only ever has one library: the conversion refuses a stick that has both, and no other
+cratemover write will add a second library to a stick. It never adds a `rekordbox.xml`. Serato keeps cues and grids inside the audio files, so converting to Serato updates
+those tags; converting away from Serato leaves them in place (other programs ignore them).
 
 *Restore* on a backup puts the stick back as it was: library folders, Serato tags, and files the
 conversion added removed. Nothing reformats or re-images the drive: each program only reads its
 own library files, so rewriting those (byte for byte as that program writes them, for Rekordbox)
-is the whole conversion, and the audio stays untouched.
+is the whole conversion.
 
 **DDJ-400 / DDJ-FLX4 (the stick goes into the laptop).** These controllers have no USB port for a
 stick, so what matters is what the laptop software does with it:

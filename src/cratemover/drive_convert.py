@@ -1,14 +1,17 @@
-"""One-button conversion of a USB drive's library, with a backup to undo it.
+"""Convert a USB drive from one DJ program's library to another's, with a backup to undo it.
 
-``convert_drive`` backs the drive up, reads the library on it, and writes the
-target format(s) onto the same drive, pointing at the audio already there:
+``convert_drive`` replaces library X on the drive with library Y, and does nothing else:
 
-* the backup always holds the library folders (``PIONEER``, ``_Serato_``) and,
-  for every audio file whose Serato tags will change, the original tag values,
-  so a restore is exact without copying the audio; ``full`` copies the whole
-  drive instead;
-* by default the original library is kept, so the drive works in both programs;
-  with ``keep_source=False`` it is removed after a successful conversion.
+* it reads X, writes Y pointing at the audio already on the drive, then deletes X's folder
+  (``PIONEER`` or ``_Serato_``). Audio is only added where Y can't play a file as it is (an
+  Ogg file becomes an MP3 for Rekordbox), and only changed where Y keeps its data inside the
+  audio (Serato's cues and grids);
+* nothing else is put on the drive: no ``rekordbox.xml``, no ``*.cratemover-*`` backups, no
+  files moved aside. It refuses a drive that already has a Y library, so there's never an old
+  Y to back up or merge with;
+* the backup goes on the computer (``backup_dir``): the library folders and, for every audio
+  file whose Serato tags will change, the original tag values, so a restore is exact without
+  copying the audio; ``full`` copies the whole drive instead.
 
 ``restore_drive`` puts a backup back.
 """
@@ -28,9 +31,9 @@ from typing import Any
 
 from .convert import ReadOptions, WriteOptions, read_library, write_library
 from .devices import _libraries
-from .model import Format
+from .model import Format, Library, Track
 from .offsets import Mp3Decoder
-from .pioneer.usb import OneLibraryMode
+from .pioneer.usb import TRANSCODE_OFFSET_MS, OneLibraryMode
 
 Progress = Callable[[str], None]
 LIBRARY_DIRS = ("PIONEER", ".PIONEER", "_Serato_")
@@ -46,16 +49,13 @@ _SERATO_MP4 = (
 
 @dataclass
 class DriveConvertOptions:
-    targets: list[Format]
+    target: Format
     source_format: Format | None = None  # None: the only library on the drive
     backup_dir: str = ""
     full_backup: bool = False
-    keep_source: bool = True
-    serato_write_tags: bool = True
-    waveforms: bool = True
-    onelibrary: OneLibraryMode = OneLibraryMode.AUTO
+    waveforms: bool = True  # Rekordbox: measure waveforms with ffmpeg (else flat placeholders)
+    onelibrary: bool = False  # Rekordbox: also write exportLibrary.db (experimental)
     mp3_decoder: Mp3Decoder = Mp3Decoder.MAD
-    xml_root: str = ""  # how the rekordbox computer sees this drive, for rekordbox.xml
 
 
 @dataclass
@@ -278,15 +278,27 @@ def restore_drive(backup: Path, root: Path, progress: Progress = print) -> list[
 def convert_drive(
     root: Path, options: DriveConvertOptions, progress: Progress = print
 ) -> DriveConvertResult:
+    """Replace the drive's library with ``options.target``: back up, convert, verify, check.
+
+    If the check or verification fails, the drive is restored from the backup and the error
+    raised, so a drive never ends up with two libraries or a half-written one.
+    """
     root = root.resolve()
+    target = options.target
+    if target not in TARGETS:
+        raise ValueError(f"can't convert a drive to {target}")
     found = {Format(lib["format"]): lib for lib in _libraries(root)}
     if not found:
         raise ValueError(f"no Rekordbox or Serato library on {root}")
+    if len(found) > 1:
+        raise ValueError(
+            f"{root} has both a Rekordbox and a Serato library. A drive should only have one: "
+            "remove one of them first"
+        )
     source_format = options.source_format or next(iter(found))
     if source_format not in found:
         raise ValueError(f"no {source_format} library on {root}")
-    targets = [t for t in options.targets if t in TARGETS and t != source_format]
-    if not targets:
+    if source_format == target:
         raise ValueError("choose a target format different from the drive's library")
     source = found[source_format]
     read = ReadOptions(
@@ -298,9 +310,9 @@ def convert_drive(
     progress("Reading the drive's library")
     library = read_library(read, progress)
 
-    # Files whose Serato tags will be rewritten, so the backup can undo it.
+    # 1. Back up to the computer. Files whose Serato tags will be rewritten are snapshotted.
     snapshot: list[Path] = []
-    if Format.SERATO in targets and options.serato_write_tags:
+    if target == Format.SERATO:
         for track in library.tracks.values():
             local = Path(track.extra.get("local", track.location))
             if local.is_file() and root in local.resolve().parents and (track.cues or track.grid):
@@ -310,7 +322,12 @@ def convert_drive(
     result = DriveConvertResult(backup=str(backup), source_format=source_format)
     before = _files(root)
 
-    for target in targets:
+    try:
+        # 2. Convert: the old library goes first, so there's never a second one on the drive.
+        for name in _library_dirs(source_format):
+            if (root / name).is_dir():
+                shutil.rmtree(root / name)
+                result.removed.append(name)
         progress(f"Writing {target.replace('_', ' ')}")
         write = WriteOptions(
             format=target,
@@ -318,34 +335,132 @@ def convert_drive(
             in_place=True,
             copy_missing=False,  # a drive conversion only uses the audio already on it
             serato_root=str(root),
-            serato_write_tags=options.serato_write_tags,
+            serato_write_tags=True,  # Serato keeps cues and grids in the audio files
             waveforms=options.waveforms,
-            onelibrary=options.onelibrary,
+            onelibrary=OneLibraryMode.ON if options.onelibrary else OneLibraryMode.OFF,
             mp3_decoder=options.mp3_decoder,
-            usb_xml_root=options.xml_root,
+            usb_xml=False,
         )
         written = write_library(library, write, read.access_rules, progress)
         result.written[target] = written.as_dict()
         result.warnings += written.warnings
+    finally:
+        # Remember files the conversion added (e.g. MP3s made from Ogg), so a restore removes them.
+        created = sorted(f for f in _files(root) - before if f.split("/", 1)[0] not in LIBRARY_DIRS)
+        manifest_path = backup / "manifest.json"
+        manifest = json.loads(manifest_path.read_text())
+        manifest["created_files"] = created
+        manifest_path.write_text(json.dumps(manifest, indent=1))
 
-    # Remember files the conversion added (e.g. MP3s made from Ogg), so a restore removes them.
-    created = sorted(
-        f
-        for f in _files(root) - before
-        if f.split("/", 1)[0] not in LIBRARY_DIRS and ".cratemover-" not in f
-    )
-    manifest_path = backup / "manifest.json"
-    manifest = json.loads(manifest_path.read_text())
-    manifest["created_files"] = created
-    manifest_path.write_text(json.dumps(manifest, indent=1))
-
-    if not options.keep_source:
-        for name in (
-            ("PIONEER", ".PIONEER") if source_format == Format.REKORDBOX_USB else ("_Serato_",)
-        ):
-            if (root / name).is_dir():
-                shutil.rmtree(root / name)
-                result.removed.append(name)
-        if source_format == Format.REKORDBOX_USB and (root / "rekordbox.xml").is_file():
-            (root / "rekordbox.xml").unlink()
+    # 3. Verify, and 4. check nothing else is on the drive.
+    progress("Checking the drive")
+    problems = verify_conversion(root, library, target, mp3_decoder=options.mp3_decoder)
+    problems += check_drive(root, before, source_format, target, library)
+    if problems:
+        progress("The check failed: restoring the drive from the backup")
+        restore_drive(backup, root, progress)
+        raise ValueError(
+            "The converted drive didn't pass its checks, so it was put back as it was:\n- "
+            + "\n- ".join(problems)
+        )
     return result
+
+
+def _library_dirs(fmt: Format) -> tuple[str, ...]:
+    return ("PIONEER", ".PIONEER") if fmt == Format.REKORDBOX_USB else ("_Serato_",)
+
+
+def _key(track: Track, root: Path) -> str:
+    """A track's audio file on the drive, without its extension (a transcode keeps its name)."""
+    location = Path(track.extra.get("local") or track.location)
+    if not location.is_absolute() or root not in location.parents:
+        location = root / str(track.location).lstrip("/\\")
+    with contextlib.suppress(ValueError):
+        location = location.relative_to(root)
+    return str(location.with_suffix("")).lower()
+
+
+# Cue positions are whole milliseconds in every format, so a converted cue may move by rounding
+# and nothing more, unless the audio itself was converted (see TRANSCODE_OFFSET_MS).
+_CUE_TOLERANCE_MS = 1.0
+
+
+def verify_conversion(
+    root: Path, source: Library, target: Format, mp3_decoder: Mp3Decoder = Mp3Decoder.MAD
+) -> list[str]:
+    """Read the new library back and compare it with the one it was made from."""
+    read = ReadOptions(
+        format=target, path=str(root), serato_root=str(root), mp3_decoder=mp3_decoder
+    )
+    try:
+        new = read_library(read)
+    except Exception as exc:
+        return [f"the new {target} library can't be read back: {exc}"]
+    expected = {
+        _key(t, root): t for t in source.tracks.values() if Path(t.extra.get("local", "")).is_file()
+    }
+    got = {_key(t, root): t for t in new.tracks.values()}
+    problems = [f"track missing: {key}" for key in sorted(expected.keys() - got.keys())]
+    max_slots = 8 if target == Format.REKORDBOX_USB else 16
+    for key in sorted(expected.keys() & got.keys()):
+        old, now = expected[key], got[key]
+        # Audio converted to MP3 starts later by the encoder's delay; the writer moves cues to match.
+        shift = TRANSCODE_OFFSET_MS if now.extension != old.extension else 0.0
+        cues = {c.slot: c.position_ms - shift for c in now.hot_cues}
+        for cue in old.hot_cues:
+            if cue.slot is None or cue.slot >= max_slots:
+                continue
+            if cue.slot not in cues:
+                problems.append(f"{key}: hot cue {cue.slot + 1} missing")
+            elif abs(cues[cue.slot] - cue.position_ms) > _CUE_TOLERANCE_MS:
+                problems.append(
+                    f"{key}: hot cue {cue.slot + 1} moved from {cue.position_ms:.1f} ms "
+                    f"to {cues[cue.slot] + shift:.1f} ms"
+                    + (f" (expected +{shift:.0f} ms for the MP3 conversion)" if shift else "")
+                )
+        if old.grid and not now.grid:
+            problems.append(f"{key}: beat grid missing")
+
+    def lists(lib: Library, tracks: dict[str, Track]) -> dict[str, list[set[str]]]:
+        by_id = {t.id: k for k, t in tracks.items()}
+        out: dict[str, list[set[str]]] = {}
+        for _, playlist in lib.playlists.walk():
+            if playlist.track_ids is not None:
+                members = {by_id[i] for i in playlist.track_ids if i in by_id}
+                out.setdefault(playlist.name, []).append(members)
+        return out
+
+    old_lists, new_lists = lists(source, expected), lists(new, got)
+    for name, versions in sorted(old_lists.items()):
+        for members in versions:
+            if members not in new_lists.get(name, []):
+                problems.append(f"playlist {name!r} missing or has different tracks")
+    return problems
+
+
+def check_drive(
+    root: Path, before: set[str], source: Format, target: Format, library: Library
+) -> list[str]:
+    """Only the new library and any audio converted for it may have been added; only the old
+    library may have gone."""
+    formats = {Format(lib["format"]) for lib in _libraries(root)}
+    problems = [] if formats == {target} else [f"the drive has these libraries: {sorted(formats)}"]
+    after = _files(root)
+    old_dirs, new_dirs = _library_dirs(source), _library_dirs(target)
+    for f in sorted(before - after):
+        if f.split("/", 1)[0] not in old_dirs:
+            problems.append(f"file removed outside the old library: {f}")
+    for f in sorted(after & before):
+        if f.split("/", 1)[0] in old_dirs:
+            problems.append(f"old library file still there: {f}")
+    audio = {_key(t, root) for t in library.tracks.values()}
+    for f in sorted(after - before):
+        if f.split("/", 1)[0] in new_dirs:
+            continue
+        if Path(f).suffix.lower() == ".mp3" and str(Path(f).with_suffix("")).lower() in audio:
+            continue  # audio converted to MP3 so the target can play it
+        problems.append(f"unexpected file added: {f}")
+    for f in sorted(after):
+        if ".cratemover-" in f or f.endswith(".part") or f.endswith(".part.mp3"):
+            problems.append(f"leftover file: {f}")
+    return problems

@@ -100,14 +100,9 @@
   <div class="wizard hidden" id="convert-panel">
     <h3 id="cv-title"></h3>
     <p class="hint" id="cv-hint"></p>
-    <label class="check"><input type="checkbox" id="cv-keep" checked> <span id="cv-keep-label"></span></label>
     <label class="check"><input type="checkbox" id="cv-full"> <span id="cv-full-label"></span></label>
-    <label class="check" id="cv-tags-row"><input type="checkbox" id="cv-tags" checked> Write cues and grids into the audio files (their previous Serato tags are backed up)</label>
     <div id="cv-rekordbox">
-      <label>Where rekordbox's computer sees this drive, for the <code>rekordbox.xml</code> put on it
-        <input id="cv-xmlroot"></label>
-      <label>OneLibrary (rekordbox 7, newest players)
-        <select id="cv-onelibrary"><option value="auto">If the drive already has one</option><option value="on">Yes</option><option value="off">No</option></select></label>
+      <label class="check"><input type="checkbox" id="cv-onelibrary"> Also write OneLibrary (<code>exportLibrary.db</code>) for rekordbox 7 and the newest players. Experimental.</label>
     </div>
     <div class="actions">
       <button type="button" id="cv-run">Back up and convert</button>

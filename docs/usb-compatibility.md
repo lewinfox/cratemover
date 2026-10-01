@@ -34,7 +34,7 @@ Stick: 32 GB, reset before every test with `scripts/wipe-usb /dev/sdX` (one MBR 
 | Written by ↓ / read in →                               | Rekordbox | Serato | Mixxx | cratemover |
 | ------------------------------------------------------ | :-------: | :----: | :---: | :--------: |
 | Rekordbox export                                       |    OK     |   X    |  OK   |     OK     |
-| Serato (drag crates to the stick)                      |     X     |   OK   |  OK   |     OK     |
+| Serato (drag crates to the stick and "Copy")           |     X     |   OK   |  OK   |     OK     |
 | cratemover: Mixxx → Rekordbox USB                      |     —     |   —    |   —   |     —      |
 | cratemover: Mixxx → Serato                             |     —     |   —    |   —   |     —      |
 | cratemover: convert Rekordbox stick → + Serato         |     —     |   —    |   —   |     —      |
