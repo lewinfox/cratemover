@@ -18,6 +18,9 @@ import sys
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
+from .detect import is_hidden
+from .model import Format
+
 DEFAULT_ROOTS = () if sys.platform == "win32" else ("/media", "/run/media", "/mnt", "/Volumes")
 # Filesystems that aren't drives even when mounted under a USB root.
 _VIRTUAL = {"proc", "sysfs", "devtmpfs", "devpts", "cgroup", "cgroup2", "overlay", "autofs",
@@ -88,10 +91,12 @@ def _libraries(path: Path) -> list[dict[str, str]]:
     for folder in ("PIONEER", ".PIONEER"):
         rekordbox = path / folder / "rekordbox"
         if _is_file(rekordbox / "export.pdb") or _is_file(rekordbox / "exportLibrary.db"):
-            found.append({"format": "rekordbox_usb", "path": str(path)})
+            found.append({"format": Format.REKORDBOX_USB, "path": str(path)})
             break
     if _is_file(path / "_Serato_" / "database V2"):
-        found.append({"format": "serato", "path": str(path / "_Serato_"), "serato_root": str(path)})
+        found.append(
+            {"format": Format.SERATO, "path": str(path / "_Serato_"), "serato_root": str(path)}
+        )
     return found
 
 
@@ -168,11 +173,7 @@ def list_drives(
             except OSError:
                 continue
             for candidate in candidates:
-                if (
-                    str(candidate) in drives
-                    or not candidate.is_dir()
-                    or candidate.name.startswith(".")
-                ):
+                if str(candidate) in drives or not candidate.is_dir() or is_hidden(candidate, root):
                     continue
                 if any(str(candidate).startswith(d + "/") for d in drives):
                     continue

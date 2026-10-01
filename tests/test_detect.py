@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from cratemover.detect import detect_libraries
+from cratemover.model import Format
 from cratemover.paths import infer_access_rules
 
 
@@ -20,17 +21,21 @@ def test_detects_each_kind_of_library(tmp_path: Path) -> None:
     xml = _touch(tmp_path / "xml/collection.xml", b"<?xml?><DJ_PLAYLISTS Version='1.0.0'>")
     _touch(tmp_path / "xml/other.xml", b"<nope/>")
 
-    assert detect_libraries(tmp_path / "mixxx") == [{"format": "mixxx", "path": str(mixxx)}]
-    assert detect_libraries(tmp_path / "rb") == [{"format": "rekordbox_db", "path": str(rekordbox)}]
-    assert detect_libraries(rekordbox) == [{"format": "rekordbox_db", "path": str(rekordbox)}]
+    assert detect_libraries(tmp_path / "mixxx") == [{"format": Format.MIXXX, "path": str(mixxx)}]
+    assert detect_libraries(tmp_path / "rb") == [
+        {"format": Format.REKORDBOX_DB, "path": str(rekordbox)}
+    ]
+    assert detect_libraries(rekordbox) == [{"format": Format.REKORDBOX_DB, "path": str(rekordbox)}]
     assert [lib["format"] for lib in detect_libraries(tmp_path / "stick")] == [
-        "rekordbox_usb",
-        "serato",
+        Format.REKORDBOX_USB,
+        Format.SERATO,
     ]
     assert detect_libraries(tmp_path / "stick/PIONEER/rekordbox/export.pdb") == [
-        {"format": "rekordbox_usb", "path": str(tmp_path / "stick")}
+        {"format": Format.REKORDBOX_USB, "path": str(tmp_path / "stick")}
     ]
-    assert detect_libraries(tmp_path / "xml") == [{"format": "rekordbox_xml", "path": str(xml)}]
+    assert detect_libraries(tmp_path / "xml") == [
+        {"format": Format.REKORDBOX_XML, "path": str(xml)}
+    ]
     assert detect_libraries(tmp_path / "nothing") == []
 
 

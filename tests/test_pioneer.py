@@ -10,9 +10,10 @@ from conftest import FIXTURES, needs_ffmpeg
 from oracles.rekordbox_pdb import Database
 
 from cratemover.convert import ReadOptions, WriteOptions, read_library, write_library
-from cratemover.model import CueRole
+from cratemover.model import CueRole, Format
 from cratemover.pioneer import anlz
 from cratemover.pioneer.pdb import decode_string, encode_string, read_pdb, write_pdb
+from cratemover.pioneer.usb import OneLibraryMode
 
 RB = FIXTURES / "rekordbox"
 STICK = RB / "stick-6.8.6"
@@ -137,7 +138,7 @@ def test_grid_expansion() -> None:
 
 
 def test_read_real_stick() -> None:
-    lib = read_library(ReadOptions("rekordbox_usb", str(STICK)))
+    lib = read_library(ReadOptions(Format.REKORDBOX_USB, str(STICK)))
     tracks = {t.title: t for t in lib.tracks.values()}
     source = tracks["Assign The Source (Remaster)"]
     assert source.artist == "Reboot" and source.bpm == 126 and source.genre == "Minimal / Deep Tech"
@@ -165,11 +166,14 @@ def test_write_stick_from_mixxx(library_copy: Path, tmp_path: Path) -> None:
     pyrekordbox_anlz = pytest.importorskip("pyrekordbox.anlz")
     stick = tmp_path / "stick"
     stick.mkdir()
-    source = read_library(ReadOptions("mixxx", str(library_copy / "mixxx")))
-    result = write_library(source, WriteOptions("rekordbox_usb", str(stick), onelibrary="off"), [])
+    source = read_library(ReadOptions(Format.MIXXX, str(library_copy / "mixxx")))
+    result = write_library(
+        source, WriteOptions(Format.REKORDBOX_USB, str(stick), onelibrary=OneLibraryMode.OFF), []
+    )
     assert "5 track(s) on the stick: 4 copied, 1 converted to MP3" in result.warnings[0]
     back = {
-        t.title: t for t in read_library(ReadOptions("rekordbox_usb", str(stick))).tracks.values()
+        t.title: t
+        for t in read_library(ReadOptions(Format.REKORDBOX_USB, str(stick))).tracks.values()
     }
     before = {t.title: t for t in source.tracks.values()}
     assert set(back) == {"First Light", "Second Wind", "Drift", "Vorbis", "Apple"}
@@ -191,7 +195,9 @@ def test_write_stick_from_mixxx(library_copy: Path, tmp_path: Path) -> None:
         parsed = pyrekordbox_anlz.AnlzFile.parse_file(f)
         assert parsed.get("path").startswith("/Contents/")
     # Run again: waveforms are reused, nothing is copied twice.
-    again = write_library(source, WriteOptions("rekordbox_usb", str(stick), onelibrary="off"), [])
+    again = write_library(
+        source, WriteOptions(Format.REKORDBOX_USB, str(stick), onelibrary=OneLibraryMode.OFF), []
+    )
     assert "0 copied" in again.warnings[0] and "5 reused" in again.warnings[0]
 
 
@@ -202,9 +208,13 @@ def test_onelibrary_written_alongside(library_copy: Path, tmp_path: Path) -> Non
 
     stick = tmp_path / "stick"
     stick.mkdir()
-    source = read_library(ReadOptions("mixxx", str(library_copy / "mixxx")))
+    source = read_library(ReadOptions(Format.MIXXX, str(library_copy / "mixxx")))
     write_library(
-        source, WriteOptions("rekordbox_usb", str(stick), onelibrary="on", waveforms=False), []
+        source,
+        WriteOptions(
+            Format.REKORDBOX_USB, str(stick), onelibrary=OneLibraryMode.ON, waveforms=False
+        ),
+        [],
     )
     db = stick / "PIONEER/rekordbox/exportLibrary.db"
     assert not db.read_bytes().startswith(b"SQLite format 3")  # encrypted

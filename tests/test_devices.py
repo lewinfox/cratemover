@@ -5,7 +5,9 @@ from pathlib import Path
 
 from conftest import FIXTURES
 
+from cratemover.detect import is_hidden
 from cratemover.devices import list_drives
+from cratemover.model import Format
 
 
 def _mounts(tmp_path: Path, lines: list[str]) -> Path:
@@ -37,10 +39,10 @@ def test_lists_mounted_sticks_and_their_libraries(tmp_path: Path) -> None:
     )
     drives = {d.label: d for d in list_drives([media], mounts)}
     assert set(drives) == {"CDJ STICK", "SERATO", "BLANK"}
-    assert drives["CDJ STICK"].libraries == [{"format": "rekordbox_usb", "path": str(cdj)}]
+    assert drives["CDJ STICK"].libraries == [{"format": Format.REKORDBOX_USB, "path": str(cdj)}]
     assert drives["CDJ STICK"].fstype == "vfat" and not drives["CDJ STICK"].notes
     assert drives["SERATO"].libraries == [
-        {"format": "serato", "path": str(serato / "_Serato_"), "serato_root": str(serato)}
+        {"format": Format.SERATO, "path": str(serato / "_Serato_"), "serato_root": str(serato)}
     ]
     assert any("FAT32" in n for n in drives["SERATO"].notes)
     assert drives["BLANK"].libraries == [] and drives["BLANK"].writable
@@ -53,3 +55,16 @@ def test_finds_library_folders_without_proc_mounts(tmp_path: Path) -> None:
     (volumes / "Macintosh HD").mkdir()
     drives = list_drives([volumes], tmp_path / "no-such-file")
     assert [d.label for d in drives] == ["STICK"]
+
+
+def test_ignores_libraries_in_the_bin(tmp_path: Path) -> None:
+    stick = tmp_path / "STICK"
+    for trash in (".Trash-1000/files", "$RECYCLE.BIN/S-1-5"):
+        (stick / trash / "_Serato_").mkdir(parents=True)
+        shutil.copy(
+            FIXTURES / "serato-db/database_v2_test.bin", stick / trash / "_Serato_" / "database V2"
+        )
+    assert is_hidden(stick / ".Trash-1000/files/_Serato_", stick)
+    assert is_hidden(stick / "$RECYCLE.BIN/S-1-5", stick)
+    assert not is_hidden(stick / ".mixxx", stick)
+    assert list_drives([tmp_path], tmp_path / "no-such-file") == []

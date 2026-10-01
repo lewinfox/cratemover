@@ -18,13 +18,17 @@ from .convert import (
     write_library,
 )
 from .keys import KeyNotation
-from .offsets import MP3_DECODERS
+from .model import Format
+from .offsets import Mp3Decoder
 from .paths import parse_rules
-from .sync import CuePolicy, PlaylistPolicy, Prefer, SyncOptions
+from .pioneer.usb import OneLibraryMode
+from .sync import CuePolicy, Direction, PlaylistPolicy, Prefer, SyncOptions
 
 
 def _add_read_args(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("--from", dest="source_format", required=True, choices=SOURCE_FORMATS)
+    parser.add_argument(
+        "--from", dest="source_format", required=True, type=Format, choices=list(SOURCE_FORMATS)
+    )
     parser.add_argument(
         "source",
         help="mixxxdb.sqlite (or its folder), rekordbox.xml, Rekordbox folder/master.db, or _Serato_ folder",
@@ -37,7 +41,11 @@ def _add_read_args(parser: argparse.ArgumentParser) -> None:
         help="where to find the library's files on this machine, e.g. '/Users/me=>/home/me' (repeatable)",
     )
     parser.add_argument(
-        "--mp3-decoder", choices=MP3_DECODERS, default="MAD", help="Mixxx's MP3 decoder"
+        "--mp3-decoder",
+        type=Mp3Decoder,
+        choices=list(Mp3Decoder),
+        default=Mp3Decoder.MAD,
+        help="Mixxx's MP3 decoder",
     )
     parser.add_argument(
         "--serato-root",
@@ -63,7 +71,12 @@ def _read_options(args: argparse.Namespace) -> ReadOptions:
 def _add_usb_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--no-copy", action="store_true", help="don't copy tracks onto USB sticks")
     parser.add_argument("--no-waveforms", action="store_true", help="don't measure waveforms (USB)")
-    parser.add_argument("--onelibrary", choices=["auto", "on", "off"], default="auto")
+    parser.add_argument(
+        "--onelibrary",
+        type=OneLibraryMode,
+        choices=list(OneLibraryMode),
+        default=OneLibraryMode.AUTO,
+    )
     parser.add_argument("--device-name", default="")
 
 
@@ -76,7 +89,9 @@ def main(argv: list[str] | None = None) -> int:
 
     convert = sub.add_parser("convert", help="convert a library")
     _add_read_args(convert)
-    convert.add_argument("--to", dest="target_format", required=True, choices=TARGET_FORMATS)
+    convert.add_argument(
+        "--to", dest="target_format", required=True, type=Format, choices=list(TARGET_FORMATS)
+    )
     convert.add_argument("output", help="output folder")
     convert.add_argument(
         "--path",
@@ -85,7 +100,7 @@ def main(argv: list[str] | None = None) -> int:
         metavar="FROM=>TO",
         help="rewrite track paths for the target machine (repeatable)",
     )
-    convert.add_argument("--key-notation", choices=[k.value for k in KeyNotation])
+    convert.add_argument("--key-notation", type=KeyNotation, choices=list(KeyNotation))
     convert.add_argument(
         "--playlist", action="append", default=[], help="only this playlist (repeatable)"
     )
@@ -108,28 +123,39 @@ def main(argv: list[str] | None = None) -> int:
     _add_usb_args(convert)
 
     sync = sub.add_parser("sync", help="sync two libraries in place")
-    sync.add_argument("--a-format", required=True, choices=SOURCE_FORMATS)
+    sync.add_argument("--a-format", required=True, type=Format, choices=list(SOURCE_FORMATS))
     sync.add_argument("a", help="library A")
-    sync.add_argument("--b-format", required=True, choices=SOURCE_FORMATS)
+    sync.add_argument("--b-format", required=True, type=Format, choices=list(SOURCE_FORMATS))
     sync.add_argument("b", help="library B")
-    sync.add_argument("--direction", choices=["both", "a_to_b", "b_to_a"], default="both")
+    sync.add_argument(
+        "--direction", type=Direction, choices=list(Direction), default=Direction.BOTH
+    )
     sync.add_argument(
         "--prefer",
-        choices=[p.value for p in Prefer],
-        default="incoming",
+        type=Prefer,
+        choices=list(Prefer),
+        default=Prefer.INCOMING,
         help="incoming: the side changes come from wins (A, for both ways); base: the other",
     )
-    sync.add_argument("--cues", choices=[c.value for c in CuePolicy], default="merge")
-    sync.add_argument("--grids", choices=["fill", "replace"], default="fill")
-    sync.add_argument("--metadata", choices=["fill", "replace"], default="fill")
-    sync.add_argument("--playlists", choices=[p.value for p in PlaylistPolicy], default="merge")
+    fill_or_replace = [CuePolicy.FILL, CuePolicy.REPLACE]
+    sync.add_argument("--cues", type=CuePolicy, choices=list(CuePolicy), default=CuePolicy.MERGE)
+    sync.add_argument("--grids", type=CuePolicy, choices=fill_or_replace, default=CuePolicy.FILL)
+    sync.add_argument("--metadata", type=CuePolicy, choices=fill_or_replace, default=CuePolicy.FILL)
+    sync.add_argument(
+        "--playlists",
+        type=PlaylistPolicy,
+        choices=list(PlaylistPolicy),
+        default=PlaylistPolicy.MERGE,
+    )
     sync.add_argument("--no-add", action="store_true", help="don't add tracks the other side lacks")
     sync.add_argument(
         "--path", action="append", default=[], metavar="FROM=>TO", help="A paths => B paths"
     )
     sync.add_argument("--a-serato-root", default="/")
     sync.add_argument("--b-serato-root", default="/")
-    sync.add_argument("--mp3-decoder", choices=MP3_DECODERS, default="MAD")
+    sync.add_argument(
+        "--mp3-decoder", type=Mp3Decoder, choices=list(Mp3Decoder), default=Mp3Decoder.MAD
+    )
     sync.add_argument("--write-serato-tags", action="store_true")
     sync.add_argument(
         "--dry-run", action="store_true", help="report what would change, write nothing"
@@ -160,12 +186,16 @@ def main(argv: list[str] | None = None) -> int:
         print(message, file=sys.stderr)
 
     if args.command == "sync":
-        for fmt in {"both": [args.a_format, args.b_format], "a_to_b": [args.b_format],
-                    "b_to_a": [args.a_format]}[args.direction]:  # fmt: skip
+        written = {
+            Direction.BOTH: [args.a_format, args.b_format],
+            Direction.A_TO_B: [args.b_format],
+            Direction.B_TO_A: [args.a_format],
+        }[args.direction]
+        for fmt in written:
             if fmt not in SYNC_FORMATS:
                 parser.error(f"{fmt} can only be read; sync it one way only")
 
-        def side(fmt: str, path: str, root: str) -> SyncSide:
+        def side(fmt: Format, path: str, root: str) -> SyncSide:
             read = ReadOptions(
                 format=fmt, path=path, mp3_decoder=args.mp3_decoder, serato_root=root
             )
@@ -182,11 +212,11 @@ def main(argv: list[str] | None = None) -> int:
             return SyncSide(read, write)
 
         options = SyncOptions(
-            prefer=Prefer(args.prefer),
-            cues=CuePolicy(args.cues),
-            grids=CuePolicy(args.grids),
-            metadata=CuePolicy(args.metadata),
-            playlists=PlaylistPolicy(args.playlists),
+            prefer=args.prefer,
+            cues=args.cues,
+            grids=args.grids,
+            metadata=args.metadata,
+            playlists=args.playlists,
             add_tracks=not args.no_add,
             path_rules=parse_rules("\n".join(args.path)),
         )
@@ -215,7 +245,7 @@ def main(argv: list[str] | None = None) -> int:
         format=args.target_format,
         output_dir=args.output,
         path_rules=parse_rules("\n".join(args.path)),
-        key_notation=KeyNotation(args.key_notation) if args.key_notation else None,
+        key_notation=args.key_notation,
         mp3_decoder=args.mp3_decoder,
         memory_cues_to_hot_cues=not args.no_memory_to_hot,
         serato_root=args.target_serato_root,

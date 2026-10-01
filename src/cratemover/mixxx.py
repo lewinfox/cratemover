@@ -169,7 +169,7 @@ def encode_beatmap(frames: list[int]) -> bytes:
 
 @dataclass
 class MixxxReadOptions:
-    mp3_decoder: Mp3Decoder = "MAD"
+    mp3_decoder: Mp3Decoder = Mp3Decoder.MAD
     include_hidden_playlists: bool = False
 
 
@@ -321,7 +321,7 @@ def read_mixxx(
 
 @dataclass
 class MixxxWriteOptions:
-    mp3_decoder: Mp3Decoder = "MAD"
+    mp3_decoder: Mp3Decoder = Mp3Decoder.MAD
     base_database: Path | None = None  # merge into a copy of this mixxxdb.sqlite
     playlists_as_crates: bool = False  # write every playlist as a crate
     overwrite_existing: bool = True  # replace cues/grid of tracks already in the base database

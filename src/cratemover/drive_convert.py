@@ -28,10 +28,13 @@ from typing import Any
 
 from .convert import ReadOptions, WriteOptions, read_library, write_library
 from .devices import _libraries
+from .model import Format
+from .offsets import Mp3Decoder
+from .pioneer.usb import OneLibraryMode
 
 Progress = Callable[[str], None]
 LIBRARY_DIRS = ("PIONEER", ".PIONEER", "_Serato_")
-TARGETS = ("rekordbox_usb", "serato")
+TARGETS = (Format.REKORDBOX_USB, Format.SERATO)
 _SERATO_ID3 = ("GEOB:Serato Markers2", "GEOB:Serato Markers_", "GEOB:Serato BeatGrid")
 _SERATO_VORBIS = ("SERATO_MARKERS_V2", "SERATO_BEATGRID", "SERATO_MARKERS2")
 _SERATO_MP4 = (
@@ -43,22 +46,22 @@ _SERATO_MP4 = (
 
 @dataclass
 class DriveConvertOptions:
-    targets: list[str]
-    source_format: str = ""  # "" = the only library on the drive
+    targets: list[Format]
+    source_format: Format | None = None  # None: the only library on the drive
     backup_dir: str = ""
     full_backup: bool = False
     keep_source: bool = True
     serato_write_tags: bool = True
     waveforms: bool = True
-    onelibrary: str = "auto"
-    mp3_decoder: str = "MAD"
+    onelibrary: OneLibraryMode = OneLibraryMode.AUTO
+    mp3_decoder: Mp3Decoder = Mp3Decoder.MAD
     xml_root: str = ""  # how the rekordbox computer sees this drive, for rekordbox.xml
 
 
 @dataclass
 class DriveConvertResult:
     backup: str
-    source_format: str
+    source_format: Format
     written: dict[str, dict[str, Any]] = field(default_factory=dict)
     removed: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
@@ -276,7 +279,7 @@ def convert_drive(
     root: Path, options: DriveConvertOptions, progress: Progress = print
 ) -> DriveConvertResult:
     root = root.resolve()
-    found = {lib["format"]: lib for lib in _libraries(root)}
+    found = {Format(lib["format"]): lib for lib in _libraries(root)}
     if not found:
         raise ValueError(f"no Rekordbox or Serato library on {root}")
     source_format = options.source_format or next(iter(found))
@@ -287,17 +290,17 @@ def convert_drive(
         raise ValueError("choose a target format different from the drive's library")
     source = found[source_format]
     read = ReadOptions(
-        format=source_format,  # type: ignore[arg-type]
+        format=source_format,
         path=source["path"],
         serato_root=source.get("serato_root", str(root)),
-        mp3_decoder=options.mp3_decoder,  # type: ignore[arg-type]
+        mp3_decoder=options.mp3_decoder,
     )
     progress("Reading the drive's library")
     library = read_library(read, progress)
 
     # Files whose Serato tags will be rewritten, so the backup can undo it.
     snapshot: list[Path] = []
-    if "serato" in targets and options.serato_write_tags:
+    if Format.SERATO in targets and options.serato_write_tags:
         for track in library.tracks.values():
             local = Path(track.extra.get("local", track.location))
             if local.is_file() and root in local.resolve().parents and (track.cues or track.grid):
@@ -310,7 +313,7 @@ def convert_drive(
     for target in targets:
         progress(f"Writing {target.replace('_', ' ')}")
         write = WriteOptions(
-            format=target,  # type: ignore[arg-type]
+            format=target,
             output_dir=str(root),
             in_place=True,
             copy_missing=False,  # a drive conversion only uses the audio already on it
@@ -318,7 +321,7 @@ def convert_drive(
             serato_write_tags=options.serato_write_tags,
             waveforms=options.waveforms,
             onelibrary=options.onelibrary,
-            mp3_decoder=options.mp3_decoder,  # type: ignore[arg-type]
+            mp3_decoder=options.mp3_decoder,
             usb_xml_root=options.xml_root,
         )
         written = write_library(library, write, read.access_rules, progress)
@@ -337,10 +340,12 @@ def convert_drive(
     manifest_path.write_text(json.dumps(manifest, indent=1))
 
     if not options.keep_source:
-        for name in ("PIONEER", ".PIONEER") if source_format == "rekordbox_usb" else ("_Serato_",):
+        for name in (
+            ("PIONEER", ".PIONEER") if source_format == Format.REKORDBOX_USB else ("_Serato_",)
+        ):
             if (root / name).is_dir():
                 shutil.rmtree(root / name)
                 result.removed.append(name)
-        if source_format == "rekordbox_usb" and (root / "rekordbox.xml").is_file():
+        if source_format == Format.REKORDBOX_USB and (root / "rekordbox.xml").is_file():
             (root / "rekordbox.xml").unlink()
     return result

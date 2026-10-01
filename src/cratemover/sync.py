@@ -24,6 +24,12 @@ from .model import Cue, Library, Playlist, Track, normalise_path, path_name
 from .paths import apply_rules
 
 
+class Direction(StrEnum):
+    A_TO_B = "a_to_b"
+    B_TO_A = "b_to_a"
+    BOTH = "both"
+
+
 class Prefer(StrEnum):
     INCOMING = "incoming"  # the other library wins conflicts
     BASE = "base"  # the library being updated keeps its values
